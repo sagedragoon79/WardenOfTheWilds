@@ -122,6 +122,22 @@ namespace WardenOfTheWilds
         /// through the same butchering pipeline.</summary>
         public static MelonPreferences_Entry<float> TrapperLodgeButcherSpeedMult { get; private set; } = null!;
 
+        // ── Rally / recall keybinds ──────────────────────────────────────────
+        /// <summary>Key to rally all hunters to the current cursor world position.
+        /// Early-game raider defense use case — player can pull every hunter to
+        /// a chokepoint with one hotkey instead of clicking each individually.
+        /// Unity KeyCode name (G, H, R, etc.). Change if it conflicts with
+        /// vanilla bindings.</summary>
+        public static MelonPreferences_Entry<string> HunterRallyKeyName       { get; private set; } = null!;
+        /// <summary>Key to send all hunters back to their assigned cabins.
+        /// Useful for pulling hunters out of combat when things escalate.</summary>
+        public static MelonPreferences_Entry<string> HunterReturnHomeKeyName  { get; private set; } = null!;
+        /// <summary>Key to select all hunters into vanilla's multi-selection.
+        /// Combined with normal vanilla click-to-move, this lets you hotkey-select
+        /// every hunter then right-click terrain to command them. No rally point
+        /// commitment needed.</summary>
+        public static MelonPreferences_Entry<string> HunterSelectAllKeyName  { get; private set; } = null!;
+
         // ── Hunting Lodge — big game / survival config ────────────────────────
         /// <summary>Movement speed multiplier applied to Hunting Lodge hunters in off-road terrain.
         /// The tech tree grants a speed boost to all hunters off-road; this preference applies
@@ -375,6 +391,30 @@ namespace WardenOfTheWilds
                 description: "Same mechanic for Trapper Lodge. Small carcasses from traps " +
                              "go through the same butchering pipeline — bonus applies.");
 
+            HunterRallyKeyName = cat.CreateEntry("HunterRallyKey", "Alt+K",
+                display_name: "Hunter Rally Hotkey",
+                description: "Press this key to rally ALL hunters to the current cursor " +
+                             "world position. Addresses the early-game pain of finding and " +
+                             "sending each hunter one at a time during raids. Accepts Unity " +
+                             "KeyCode names AND modifier combos like 'Alt+R' or 'Ctrl+H'. " +
+                             "AVOID single numbers 1-9 (Control Groups), WASD/QE (camera), " +
+                             "G F I H Z R B P M (vanilla UI/overlay toggles), and Tab/Space " +
+                             "(rotate build / pause). Safe single letters confirmed: K, U. " +
+                             "Or use 'Keypad0-9', 'F10', 'F11', or any Alt+letter combo.");
+
+            HunterReturnHomeKeyName = cat.CreateEntry("HunterReturnHomeKey", "F10",
+                display_name: "Hunter Return-Home Hotkey",
+                description: "Send all hunters back to their assigned cabins. Useful for " +
+                             "pulling them out of a fight when raiders escalate. Same key " +
+                             "format as the rally key.");
+
+            HunterSelectAllKeyName = cat.CreateEntry("HunterSelectAllKey", "Ctrl+K",
+                display_name: "Hunter Select-All Hotkey",
+                description: "Selects every hunter into vanilla's multi-selection. Then " +
+                             "right-click terrain to move them normally (vanilla click-to-move " +
+                             "works on civilians once selected). Preserves existing non-hunter " +
+                             "selections if you want to mix.");
+
             // Hunting Lodge big game
             HuntingLodgeSpeedMult = cat.CreateEntry("HuntingLodgeSpeedMult", 1.35f,
                 display_name: "Hunting Lodge Off-Road Speed Multiplier",
@@ -617,6 +657,17 @@ namespace WardenOfTheWilds
             // a predator enters HunterDangerRadius before it can land a hit
             if (HunterOverhaulEnabled.Value && HunterDangerRadius.Value > 0f)
                 MelonCoroutines.Start(HunterCombatPatches.DangerProximityWatcher());
+        }
+
+        /// <summary>
+        /// Per-frame hook. Used for hotkey polling (rally, return-home).
+        /// Gated on HunterOverhaulEnabled so a disabled install incurs
+        /// zero per-frame cost.
+        /// </summary>
+        public override void OnUpdate()
+        {
+            if (!HunterOverhaulEnabled.Value) return;
+            HunterRallySystem.Tick();
         }
 
         /// <summary>
