@@ -108,6 +108,20 @@ namespace WardenOfTheWilds
         /// <summary>Multiplier on deer population cap. Affects T1 hunting yield.</summary>
         public static MelonPreferences_Entry<float> DeerSpawnMultiplier       { get; private set; } = null!;
 
+        // ── Butcher speed (T2 2-slot cabins) ─────────────────────────────────
+        /// <summary>Butchering work-unit multiplier for T2 Hunting Lodge cabins.
+        /// When both workers butcher simultaneously (vanilla behaviour when
+        /// carcasses are queued), throughput becomes 2 × this. 1.25 = 25%
+        /// faster per worker; combined with 2 workers = ~2.5× T1 vanilla.
+        /// Addresses the core "T2 underperforms T1" complaint — butchering was
+        /// the bottleneck, now it isn't.</summary>
+        public static MelonPreferences_Entry<float> HuntingLodgeButcherSpeedMult { get; private set; } = null!;
+        /// <summary>Butchering work-unit multiplier for T2 Trapper Lodge cabins.
+        /// Same design as HuntingLodge: 2 workers × this = strong but not
+        /// game-breaking. Trapper carcasses (small carcasses from traps) go
+        /// through the same butchering pipeline.</summary>
+        public static MelonPreferences_Entry<float> TrapperLodgeButcherSpeedMult { get; private set; } = null!;
+
         // ── Hunting Lodge — big game / survival config ────────────────────────
         /// <summary>Movement speed multiplier applied to Hunting Lodge hunters in off-road terrain.
         /// The tech tree grants a speed boost to all hunters off-road; this preference applies
@@ -345,6 +359,21 @@ namespace WardenOfTheWilds
             DeerSpawnMultiplier = cat.CreateEntry("DeerSpawnMultiplier", 1.0f,
                 display_name: "Deer Spawn Multiplier",
                 description: "Multiplier on deer population cap. Affects T1 hunter meat yield.");
+
+            HuntingLodgeButcherSpeedMult = cat.CreateEntry(
+                "HuntingLodgeButcherSpeedMult", 1.25f,
+                display_name: "Hunting Lodge Butcher Speed Multiplier",
+                description: "Per-worker butchering speed bonus for T2 Hunting Lodge. " +
+                             "Stacks with 2-worker parallelism — 2 workers × 1.25 ≈ 2.5× " +
+                             "T1 vanilla butchering throughput. Resolves the 'T2 " +
+                             "underperforms T1' complaint (butchering was the bottleneck). " +
+                             "1.0 = vanilla per-worker speed (still 2× from parallelism).");
+
+            TrapperLodgeButcherSpeedMult = cat.CreateEntry(
+                "TrapperLodgeButcherSpeedMult", 1.25f,
+                display_name: "Trapper Lodge Butcher Speed Multiplier",
+                description: "Same mechanic for Trapper Lodge. Small carcasses from traps " +
+                             "go through the same butchering pipeline — bonus applies.");
 
             // Hunting Lodge big game
             HuntingLodgeSpeedMult = cat.CreateEntry("HuntingLodgeSpeedMult", 1.35f,
