@@ -169,10 +169,10 @@ namespace WardenOfTheWilds.Components
             switch (_path)
             {
                 case HunterT2Path.TrapperLodge:
-                    // Trap specialist — relies on the T2 trap system entirely.
-                    // Trap count increased above vanilla (1 → configurable),
-                    // spawn interval reduced proportionally to pelt multiplier.
-                    SetWorkerSlots(1);
+                    // Trap specialist — slot 1 runs traplines, slot 2 is the
+                    // dedicated butcher (processes small carcasses faster than
+                    // vanilla's one-person-does-everything pattern).
+                    SetWorkerSlots(2);
                     SetWorkRadius(1.0f);            // Same radius — trap lines are local
                     SetWorkerSpeed(1.0f);           // No speed boost — trappers walk routes
                     if (isT2)
@@ -291,6 +291,16 @@ namespace WardenOfTheWilds.Components
         }
 
         // ── Worker slot adjustment (Manifest Delivery pattern) ───────────────
+        //
+        // Save/load gotcha: vanilla serialises userDefinedMaxWorkers, then on
+        // load clamps it to vanilla's (1-slot) maxWorkers BEFORE our mod runs.
+        // We raise maxWorkers here, but if we only clamp userDefinedMaxWorkers
+        // DOWN (never up), the 2nd slot stays off forever on reloaded saves.
+        //
+        // Fix: sync userDefinedMaxWorkers to targetMax in BOTH directions,
+        // then call AttemptToAddMaxWorkers() so the game hires a villager
+        // into the new slot immediately (mirrors what clicking the + button
+        // does — same path we used in MD).
         private void SetWorkerSlots(int targetMax)
         {
             var building = GetComponent<Building>();
@@ -310,8 +320,30 @@ namespace WardenOfTheWilds.Components
                     }
                 }
 
-                if (building.userDefinedMaxWorkers > targetMax)
+                // Sync userDefinedMaxWorkers in both directions
+                if (building.userDefinedMaxWorkers != targetMax)
+                {
+                    int before = building.userDefinedMaxWorkers;
                     building.userDefinedMaxWorkers = targetMax;
+                    WardenOfTheWildsMod.Log.Msg(
+                        $"[WotW] '{gameObject.name}' userDefinedMaxWorkers: " +
+                        $"{before} → {targetMax}");
+                }
+
+                // Trigger the hiring path (equivalent to clicking the + button).
+                // Without this, the slot widens but stays empty until the player
+                // manually clicks + — exactly the MD wagon shop bug.
+                if (building.userDefinedMaxWorkers > 0)
+                {
+                    int currentWorkers = building.workersRO?.Count ?? 0;
+                    if (currentWorkers < building.userDefinedMaxWorkers)
+                    {
+                        building.AttemptToAddMaxWorkers();
+                        WardenOfTheWildsMod.Log.Msg(
+                            $"[WotW] '{gameObject.name}' AttemptToAddMaxWorkers " +
+                            $"({currentWorkers} → target {building.userDefinedMaxWorkers})");
+                    }
+                }
             }
             catch (System.Exception ex)
             {

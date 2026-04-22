@@ -44,20 +44,75 @@ namespace WardenOfTheWilds.Systems
                 Type amType = animalManager.GetType();
 
                 if (WardenOfTheWildsMod.UnlockFoxSpawns.Value)
+                {
                     OverrideIntField(amType, animalManager,
                         "foxSpawnDelayInDays",
                         WardenOfTheWildsMod.FoxSpawnDelayDays.Value,
                         "fox");
 
+                    // Pre-seed daysOfChickenPresence so saves with coops built
+                    // BEFORE the mod was installed don't have to wait another
+                    // 90 days after install. If the counter is already past
+                    // the delay, leave it; otherwise fast-forward.
+                    SeedPresenceCounter(amType, animalManager,
+                        "daysOfChickenPresence",
+                        WardenOfTheWildsMod.FoxSpawnDelayDays.Value,
+                        "chicken");
+                }
+
                 if (WardenOfTheWildsMod.UnlockGroundhogSpawns.Value)
+                {
                     OverrideIntField(amType, animalManager,
                         "groundhogSpawnDelayInDays",
                         WardenOfTheWildsMod.GroundhogSpawnDelayDays.Value,
                         "groundhog");
+
+                    SeedPresenceCounter(amType, animalManager,
+                        "daysOfFieldPresence",
+                        WardenOfTheWildsMod.GroundhogSpawnDelayDays.Value,
+                        "field");
+                }
             }
             catch (Exception ex)
             {
                 MelonLogger.Warning($"[WotW] SmallGameUnlockSystem: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Pre-seeds a "days-of-X-presence" counter so installs on
+        /// existing saves don't wait another full delay period. If the
+        /// counter is already past the threshold, leave it alone (don't
+        /// rewind progress).
+        /// </summary>
+        private static void SeedPresenceCounter(
+            Type type, object instance, string fieldName, int minValue, string label)
+        {
+            try
+            {
+                var field = type.GetField(fieldName, AllInstance);
+                if (field == null) return;
+
+                int current = (int)field.GetValue(instance);
+                if (current >= minValue)
+                {
+                    MelonLogger.Msg(
+                        $"[WotW] {label} presence already {current}d (≥ {minValue}d threshold).");
+                    return;
+                }
+
+                // Fast-forward to one past the threshold so spawn gate passes
+                // on the next check.
+                int seeded = minValue + 1;
+                field.SetValue(instance, seeded);
+                MelonLogger.Msg(
+                    $"[WotW] {label} presence seeded {current}d → {seeded}d " +
+                    $"(unblocks spawn gate for existing saves).");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning(
+                    $"[WotW] SeedPresenceCounter({fieldName}): {ex.Message}");
             }
         }
 
