@@ -98,14 +98,12 @@ namespace WardenOfTheWilds.Patches
         //   L2: HunterBuilding list      (TTL =  5s)
         // Parallel Dicts instead of ValueTuple (not in net46).
 
-        // L1 — IsAnyHunter (any HunterBuilding, any path, any tier)
-        private static readonly Dictionary<int, bool>  _anyHunterCacheResult =
-            new Dictionary<int, bool>();
-        private static readonly Dictionary<int, float> _anyHunterCacheExpiry =
+        // Per-villager assigned-building cache (villagerHash → HunterBuilding or null).
+        // Populated by FindAssignedHunterBuilding via villager.residence. TTL 10s.
+        private static readonly Dictionary<int, Component?> _assignedBuildingCache =
+            new Dictionary<int, Component?>();
+        private static readonly Dictionary<int, float> _assignedBuildingCacheExpiry =
             new Dictionary<int, float>();
-        private static float _anyBuildingCacheExpiry = -1f;
-        private static readonly List<CachedBuilding> _cachedAnyBuildings =
-            new List<CachedBuilding>();
 
         // L1 — IsHuntingLodgeHunter (T2 HuntingLodge path only)
         private static readonly Dictionary<int, bool>  _hunterLodgeCacheResult =
@@ -267,10 +265,8 @@ namespace WardenOfTheWilds.Patches
         public static void OnMapLoaded()
         {
             _lastKiteTimes.Clear();
-            _anyHunterCacheResult.Clear();
-            _anyHunterCacheExpiry.Clear();
-            _cachedAnyBuildings.Clear();
-            _anyBuildingCacheExpiry = -1f;
+            _assignedBuildingCache.Clear();
+            _assignedBuildingCacheExpiry.Clear();
             _hunterLodgeCacheResult.Clear();
             _hunterLodgeCacheExpiry.Clear();
             _cachedLodgeBuildings.Clear();
@@ -322,6 +318,12 @@ namespace WardenOfTheWilds.Patches
         public static void ApplyPatches(HarmonyLib.Harmony harmony)
         {
             if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return;
+            if (!WardenOfTheWildsMod.HunterCombatEnabled.Value)
+            {
+                WardenOfTheWildsMod.Log.Msg(
+                    "[WotW] HunterCombatPatches SKIPPED (HunterCombatEnabled=false)");
+                return;
+            }
 
             // ── Phase 0: Discovery dump ───────────────────────────────────────
             // Dump is triggered in OnMapLoaded (not here). MelonLoader silently
@@ -354,19 +356,11 @@ namespace WardenOfTheWilds.Patches
                 nameof(OnPerformedAttackPostfix), isPostfix: true);
 
             // ── Patch 4a: Multi-predator retreat — AGGRO trigger ─────────────
-            // OnCombatTargetSet confirmed on Wolf/Boar/Bear from animal dump.
-            // Fires when a predator ACQUIRES a new target (before first hit).
-            // When newTarget is a hunter AND this is predator #2 targeting them
-            // within AttackerWindowSeconds → retreat immediately, no hit needed.
-            // Tries base animal types too in case the method is declared there.
-            // "DangerousAnimal" doesn't exist in vanilla — AggressiveAnimal is the
-            // correct base class, kept in list for backward compat.
-            foreach (string animalType in new[] { "Wolf", "Boar", "Bear",
-                "AggressiveAnimal" })
-            {
-                PatchMethodIfFound(harmony, animalType, "OnCombatTargetSet",
-                    nameof(OnAnimalAggroPostfix), isPostfix: true);
-            }
+            // OnCombatTargetSet is declared on AggressiveAnimal and inherited by
+            // Wolf/Boar/Bear. Patching each subclass as well would chain the same
+            // postfix 4× per aggro event — we patch only the declaring class.
+            PatchMethodIfFound(harmony, "AggressiveAnimal", "OnCombatTargetSet",
+                nameof(OnAnimalAggroPostfix), isPostfix: true);
 
             // ── Patch 4b: Multi-predator retreat — HIT fallback ───────────────
             // OnAttacked fires when the villager actually takes damage.
@@ -518,10 +512,57 @@ namespace WardenOfTheWilds.Patches
                 // died" message fires.
                 if (IsAnyHunter(comp))
                     PostHunterDeathNotification(comp, causerName);
+
+                // Purge this villager's entries from all per-hunter registries
+                // so long sessions don't accumulate stale dict entries for
+                // villagers that no longer exist.
+                PurgeDeadHunterFromRegistries(comp);
             }
             catch (Exception ex)
             {
                 MelonLogger.Warning($"[WotW] OnCombatDeathPostfix: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Removes the dead villager's hash key from every per-hunter dict we
+        /// maintain, and also removes their Component reference from any
+        /// building worker-set (since OnResidentRemoved may not fire for combat
+        /// deaths that bypass the normal residence-release flow).
+        /// </summary>
+        private static void PurgeDeadHunterFromRegistries(Component hunter)
+        {
+            try
+            {
+                int vKey = System.Runtime.CompilerServices
+                    .RuntimeHelpers.GetHashCode(hunter);
+
+                _lastKiteTimes.Remove(vKey);
+                _lastProactiveTimes.Remove(vKey);
+                _hunterFirstLowHpTime.Remove(vKey);
+                _hunterAttackers.Remove(vKey);
+                _hunterAttackerRefs.Remove(vKey);
+                _hunterWoundedStateTracker.Remove(vKey);
+                _assignedBuildingCache.Remove(vKey);
+                _assignedBuildingCacheExpiry.Remove(vKey);
+                _hunterLodgeCacheResult.Remove(vKey);
+                _hunterLodgeCacheExpiry.Remove(vKey);
+                _kiteEndTime.Remove(vKey);
+                _kiteTarget.Remove(vKey);
+                _lastChaseBreakTimes.Remove(vKey);
+
+                // Remove from building worker set (tied by building key) — also
+                // drop the reverse lookup entry.
+                if (_hunterBuildingKey.TryGetValue(vKey, out int bKey))
+                {
+                    if (_buildingWorkers.TryGetValue(bKey, out var workers))
+                        workers.Remove(hunter);
+                    _hunterBuildingKey.Remove(vKey);
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] PurgeDeadHunterFromRegistries: {ex.Message}");
             }
         }
 
@@ -716,12 +757,10 @@ namespace WardenOfTheWilds.Patches
         /// <summary>
         /// Fires after the hunter releases an arrow or bolt.
         ///
-        /// Actions:
-        ///   1. Trigger dog decoy intercept (HuntingDogSystem).
-        ///   2. Schedule a post-shot retreat: after firing, during the reload
-        ///      window, the hunter should back away from the animal. We do a
-        ///      lightweight retreat by pushing the hunter back a few units from
-        ///      the animal's current position, keeping them at bow range.
+        /// Schedules a post-shot retreat: after firing, during the reload
+        /// window, the hunter should back away from the animal. We do a
+        /// lightweight retreat by pushing the hunter back a few units from
+        /// the animal's current position, keeping them at bow range.
         /// </summary>
         public static void OnPerformedAttackPostfix(
             object __instance,
@@ -736,13 +775,9 @@ namespace WardenOfTheWilds.Patches
                 // Backing up during the reload window is baseline survival behavior.
                 if (!IsAnyHunter(hunter)) return;
 
-                // Dog decoy — sends assigned dog toward the animal,
-                // animal chases dog during the reload window.
                 // Use GetGameComponent (not GetComponent<Component>) — the latter
                 // returns Transform first, not the actual Wolf/Deer/etc.
                 var animalComp = GetGameComponent(attackTarget);
-                if (animalComp != null)
-                    HuntingDogSystem.OnHunterFired(hunter, animalComp);
 
                 // Post-shot retreat — only when the target is dangerous AND charging.
                 //
@@ -1103,6 +1138,14 @@ namespace WardenOfTheWilds.Patches
                 // (see OnIsMeleeAttackPostfix). The old delegate-subscribe
                 // path (ApplyHunterMeleeGate) was unreliable because vanilla
                 // could add handlers after ours and win the multicast return.
+
+                // ── Fix 3: BGH speed bonus — apply to newly-assigned hunter ──
+                try
+                {
+                    var enh = building.GetComponent<HunterCabinEnhancement>();
+                    enh?.RefreshSpeedBonusOnNewResident();
+                }
+                catch { }
             }
             catch (Exception ex)
             {
@@ -1721,161 +1764,44 @@ namespace WardenOfTheWilds.Patches
             return false;
         }
 
-        // ── Assigned-building field name candidates ───────────────────────────
-        // CONFIRMED from dump (26-4-19): Villager._placeOfWork (IPlaceOfWork)
-        // Tried in order on first call; the working name is cached so reflection
-        // only pays the search cost once per session.
-        private static readonly string[] AssignedBuildingCandidates = {
-            "_placeOfWork",           // ← CONFIRMED field name from dump
-            "placeOfWork",
-            "assignedBuilding", "_assignedBuilding",
-            "workplace", "_workplace",
-            "homeBuilding", "_homeBuilding",
-            "assignedWorkplace", "_assignedWorkplace",
-            "currentBuilding", "_currentBuilding",
-            "workerBuilding", "_workerBuilding",
-        };
-        private static string? _confirmedAssignedBuildingField = null;
-        private static bool    _assignedBuildingSearchDone     = false;
-
         /// <summary>
         /// Returns the HunterBuilding this villager is assigned to, or null if
-        /// they are not a hunter. Reads the assigned-building field directly from
-        /// the villager via reflection — no proximity guessing, no false positives.
+        /// they are not a hunter. Reads <c>Villager.residence</c> directly — the
+        /// same field vanilla's own hunter logic uses (see
+        /// HuntSearchEntry.ProcessNewTask and
+        /// VillagerOccupationHunter.OnHuntSubTaskValidToContinue).
         ///
-        /// The field name is discovered by trying candidates once per session and
-        /// then cached. Result per villager is cached 10s (L1) to avoid per-frame
-        /// reflection cost from the combat postfixes.
+        /// Previously this did a reflection probe for "_placeOfWork" and fell back
+        /// to a FindObjectsOfType + proximity scan on every call when the probe
+        /// failed. With 14 hunters × 5Hz hunt-task ticks = 70 calls/sec, that
+        /// proximity fallback was the dominant combat-era stutter source.
+        ///
+        /// Cached 10s per villager.
         /// </summary>
         private static Component? FindAssignedHunterBuilding(Component villager)
         {
+            if (villager == null) return null;
             try
             {
                 int vKey = System.Runtime.CompilerServices
                     .RuntimeHelpers.GetHashCode(villager);
 
-                // L1: per-villager cache — stores the assigned building (or null)
-                if (_anyHunterCacheResult.TryGetValue(vKey, out bool cachedIsHunter) &&
-                    _anyHunterCacheExpiry.TryGetValue(vKey, out float cachedExpiry) &&
-                    Time.time < cachedExpiry)
+                if (_assignedBuildingCacheExpiry.TryGetValue(vKey, out float expiry) &&
+                    Time.time < expiry)
                 {
-                    // If cached true, also retrieve building from the any-buildings list
-                    if (!cachedIsHunter) return null;
-                    // Fall through to re-read the building (the list may have changed)
-                    // — L1 just tells us "is this a hunter" to skip the reflection cost
+                    _assignedBuildingCache.TryGetValue(vKey, out var cached);
+                    return cached;
                 }
 
-                // Discover the field name once per session
-                Component? assignedBuilding = null;
-                if (!_assignedBuildingSearchDone)
-                {
-                    _assignedBuildingSearchDone = true;
-                    var vType = villager.GetType();
-                    Type? check = vType;
-                    while (check != null && _confirmedAssignedBuildingField == null)
-                    {
-                        foreach (string candidate in AssignedBuildingCandidates)
-                        {
-                            var fi = check.GetField(candidate, AllInstance);
-                            if (fi != null)
-                            {
-                                _confirmedAssignedBuildingField = candidate;
-                                MelonLogger.Msg(
-                                    $"[WotW] HunterCombatPatches: found assigned-building field " +
-                                    $"'{candidate}' on {check.Name}");
-                                break;
-                            }
-                            var pi = check.GetProperty(candidate, AllInstance);
-                            if (pi != null)
-                            {
-                                _confirmedAssignedBuildingField = candidate;
-                                MelonLogger.Msg(
-                                    $"[WotW] HunterCombatPatches: found assigned-building prop " +
-                                    $"'{candidate}' on {check.Name}");
-                                break;
-                            }
-                        }
-                        check = check.BaseType;
-                        if (check?.Name == "MonoBehaviour" || check?.Name == "Object") break;
-                    }
-                    if (_confirmedAssignedBuildingField == null)
-                        MelonLogger.Msg(
-                            "[WotW] HunterCombatPatches: assigned-building field not found — " +
-                            "falling back to proximity for hunter detection.");
-                }
+                Component? result = null;
+                if (villager is Villager v && v.residence is HunterBuilding hb)
+                    result = hb;
 
-                // Read the building from the confirmed field
-                if (_confirmedAssignedBuildingField != null)
-                {
-                    var vType = villager.GetType();
-                    object? raw = vType.GetField(_confirmedAssignedBuildingField, AllInstance)
-                                      ?.GetValue(villager)
-                               ?? vType.GetProperty(_confirmedAssignedBuildingField, AllInstance)
-                                       ?.GetValue(villager);
-                    if (raw != null)
-                    {
-                        assignedBuilding = raw as Component;
-                        // Also try extracting a Component if it's a game type wrapping one
-                        if (assignedBuilding == null)
-                        {
-                            var go = (raw as GameObject) ?? (raw as Component)?.gameObject;
-                            assignedBuilding = go?.GetComponent<Component>();
-                        }
-                    }
-                }
-
-                // Is the assigned building a HunterBuilding?
-                bool isHunter = false;
-                if (assignedBuilding != null)
-                {
-                    Type? hunterType = FindType("HunterBuilding");
-                    if (hunterType != null && hunterType.IsInstanceOfType(assignedBuilding))
-                        isHunter = true;
-                    else
-                        assignedBuilding = null; // Not a hunter building
-                }
-
-                // Proximity fallback if field not found
-                if (!_assignedBuildingSearchDone || _confirmedAssignedBuildingField == null)
-                {
-                    if (Time.time >= _anyBuildingCacheExpiry)
-                    {
-                        _cachedAnyBuildings.Clear();
-                        Type? hunterType = FindType("HunterBuilding");
-                        if (hunterType != null)
-                        {
-                            float r = 200f * WardenOfTheWildsMod.HuntingLodgeRadiusMult.Value;
-                            foreach (UnityEngine.Object obj in
-                                UnityEngine.Object.FindObjectsOfType(hunterType))
-                            {
-                                var b = obj as Component;
-                                if (b != null) _cachedAnyBuildings.Add(new CachedBuilding(b, r));
-                            }
-                        }
-                        _anyBuildingCacheExpiry = Time.time + BuildingCacheTTL;
-                    }
-                    Vector3 vPos = villager.transform.position;
-                    foreach (var entry in _cachedAnyBuildings)
-                    {
-                        if (entry.Building == null) continue;
-                        if (Vector3.Distance(entry.Building.transform.position, vPos)
-                            < entry.WorkRadius)
-                        {
-                            isHunter = true;
-                            assignedBuilding = entry.Building;
-                            break;
-                        }
-                    }
-                }
-
-                // Cache L1 result
-                _anyHunterCacheResult[vKey] = isHunter;
-                _anyHunterCacheExpiry[vKey]  = Time.time + HunterCacheTTL;
-
-                return isHunter ? assignedBuilding : null;
+                _assignedBuildingCache[vKey] = result;
+                _assignedBuildingCacheExpiry[vKey] = Time.time + HunterCacheTTL;
+                return result;
             }
-            catch { }
-            return null;
+            catch { return null; }
         }
 
         /// <summary>Convenience wrapper — true if FindAssignedHunterBuilding returns non-null.</summary>
@@ -1992,15 +1918,6 @@ namespace WardenOfTheWilds.Patches
         }
 
 
-        // ── BGH animal scan cache ─────────────────────────────────────────────
-        // FindHigherPriorityAnimal calls FindObjectsOfType for up to 3 animal types
-        // on every target acquisition. Cache results for 4 seconds so rapid
-        // target cycling doesn't repeatedly scan the scene.
-        private static readonly Dictionary<string, List<Component>> _animalScanCache =
-            new Dictionary<string, List<Component>>();
-        private static float _animalScanCacheExpiry = -1f;
-        private const float AnimalScanCacheTTL = 4f;
-
         // ── BGH targeting priority helpers ────────────────────────────────────
 
         /// <summary>
@@ -2027,16 +1944,8 @@ namespace WardenOfTheWilds.Patches
         /// <summary>
         /// Scans for a dangerous animal with a higher priority than currentPriority
         /// within searchRadius of hunterPos. Returns the closest one found, or null.
-        /// Uses FindObjectsOfType — only called on target acquisition (not per-frame).
+        /// Reads from the shared AggressiveAnimal snapshot (no dedicated scan).
         /// </summary>
-        private static void RefreshAnimalScanCache()
-        {
-            float now = Time.time;
-            if (now < _animalScanCacheExpiry) return;
-            _animalScanCache.Clear();
-            _animalScanCacheExpiry = now + AnimalScanCacheTTL;
-        }
-
         private static Component? FindHigherPriorityAnimal(
             Vector3 hunterPos, Component currentTarget,
             int currentPriority, float searchRadius)
@@ -2045,51 +1954,34 @@ namespace WardenOfTheWilds.Patches
             {
                 Component? best    = null;
                 int        bestPri = currentPriority;
-                float      bestDist = float.MaxValue;
+                float      bestDistSqr = float.MaxValue;
+                float      radiusSqr   = searchRadius * searchRadius;
 
-                // Check types in descending priority so we can early-exit on Bear.
-                // ValueTuple not available in net46 — use parallel arrays.
-                // Results are cached for AnimalScanCacheTTL seconds to avoid
-                // repeated FindObjectsOfType on rapid target cycling.
-                float now = Time.time;
-                RefreshAnimalScanCache();
-
-                string[] typeNames = { "Bear", "Wolf", "Boar" };
-                int[]    typePris  = {      3,      2,      1  };
-                for (int ti = 0; ti < typeNames.Length; ti++)
+                // Single pass over the shared AggressiveAnimal snapshot —
+                // filter each by name and compare priorities on the fly.
+                // Bear=3, Wolf=2, Boar=1. Anything else is skipped.
+                foreach (var animal in GetCachedAggressiveAnimals())
                 {
-                    string typeName = typeNames[ti];
-                    int    pri      = typePris[ti];
+                    if (animal == null || (Component)animal == currentTarget) continue;
+
+                    int pri;
+                    string name = animal.GetType().Name;
+                    if      (name == "Bear") pri = 3;
+                    else if (name == "Wolf") pri = 2;
+                    else if (name == "Boar") pri = 1;
+                    else continue;
 
                     if (pri <= currentPriority) continue;
 
-                    if (!_animalScanCache.TryGetValue(typeName, out var animalList))
-                    {
-                        animalList = new List<Component>();
-                        Type? animalType = FindType(typeName);
-                        if (animalType != null)
-                            foreach (UnityEngine.Object obj in
-                                UnityEngine.Object.FindObjectsOfType(animalType))
-                            {
-                                var c = obj as Component;
-                                if (c != null) animalList.Add(c);
-                            }
-                        _animalScanCache[typeName] = animalList;
-                    }
+                    float dSqr = (animal.transform.position - hunterPos).sqrMagnitude;
+                    if (dSqr > radiusSqr) continue;
 
-                    foreach (var c in animalList)
+                    if (pri > bestPri || (pri == bestPri && dSqr < bestDistSqr))
                     {
-                        if (c == null || c == currentTarget) continue;
-                        float d = Vector3.Distance(c.transform.position, hunterPos);
-                        if (d > searchRadius) continue;
-                        if (pri > bestPri || (pri == bestPri && d < bestDist))
-                        {
-                            best    = c;
-                            bestPri = pri;
-                            bestDist = d;
-                        }
+                        best         = animal;
+                        bestPri      = pri;
+                        bestDistSqr  = dSqr;
                     }
-                    if (bestPri == 3) break; // Bear found — can't do better
                 }
                 return best;
             }
@@ -2193,32 +2085,40 @@ namespace WardenOfTheWilds.Patches
 
         /// <summary>
         /// Gets the best kiting destination: nearest Hunting Blind assigned to
-        /// this cabin, then nearest Deer Stand, then cabin position itself.
+        /// this cabin, else null (caller falls back to cabin position).
         /// </summary>
         private static Vector3? GetKitingDestination(
             Vector3 hunterPos, Vector3 cabinPos, float workRadius)
         {
-            // 1. Assigned Hunting Blind (preferred — has cover + range bonus)
+            // 1. Assigned Hunting Blind (has cover + range bonus)
             var blind = HuntingBlindSystem.FindRetreatBlind(
                 hunterPos, cabinPos, workRadius);
             if (blind != null) return blind.Position;
 
-            // 2. Nearest Deer Stand within work radius
-            float bestDist = float.MaxValue;
-            Vector3? bestStand = null;
-            foreach (var stand in DeerStandSystem.AllStands)
-            {
-                float d = Vector3.Distance(stand.Position, hunterPos);
-                if (d < workRadius && d < bestDist)
-                {
-                    bestDist = d;
-                    bestStand = stand.Position;
-                }
-            }
-            if (bestStand.HasValue) return bestStand;
-
-            // 3. Nothing found — caller can fall back to cabin
+            // 2. Nothing found — caller falls back to cabin
             return null;
+        }
+
+        /// <summary>
+        /// <summary>
+        /// Clears the villager's CombatComponent target so the kiting AI doesn't
+        /// immediately re-engage and fight a forced retreat (which was causing
+        /// leash-retreat thrash: leash → retreat → kiting re-chases → leash
+        /// again every 3s).
+        /// </summary>
+        private static void ClearCombatTarget(Component worker)
+        {
+            try
+            {
+                var combat = worker.GetComponent<CombatComponent>();
+                if (combat == null) return;
+                // myTargetDamageable is the current combat target (confirmed
+                // from dump). Setting it null breaks the kiting loop.
+                var field = combat.GetType().GetField("myTargetDamageable",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                field?.SetValue(combat, null);
+            }
+            catch { }
         }
 
         /// <summary>
@@ -2455,23 +2355,21 @@ namespace WardenOfTheWilds.Patches
         /// </summary>
         /// <summary>
         /// Returns the nearest dangerous animal Component within radius of pos,
-        /// using the existing animal scan cache. Returns null if none found.
+        /// reading from the shared AggressiveAnimal snapshot. Null if none found.
         /// </summary>
         private static Component? FindNearestDangerousAnimalTo(Vector3 pos, float radius)
         {
             try
             {
-                RefreshAnimalScanCache();
                 Component? best     = null;
                 float      bestDist = radius * radius;
-                foreach (var kv in _animalScanCache)
+                foreach (var animal in GetCachedAggressiveAnimals())
                 {
-                    foreach (var animal in kv.Value)
-                    {
-                        if (animal == null) continue;
-                        float d = (animal.transform.position - pos).sqrMagnitude;
-                        if (d < bestDist) { bestDist = d; best = animal; }
-                    }
+                    if (animal == null) continue;
+                    string name = animal.GetType().Name;
+                    if (name != "Bear" && name != "Wolf" && name != "Boar") continue;
+                    float d = (animal.transform.position - pos).sqrMagnitude;
+                    if (d < bestDist) { bestDist = d; best = animal; }
                 }
                 return best;
             }
@@ -2558,14 +2456,24 @@ namespace WardenOfTheWilds.Patches
         // ── Type finder ───────────────────────────────────────────────────────
         // Fast path used in hot-code: patches, caches, IsAnyHunter etc.
         // Searches by qualified name only — no full assembly scan.
+        // Cache: types never move across the AppDomain, so a lookup by simple
+        // name can be memoised for the life of the process. Null results are
+        // also cached so a name that truly doesn't exist doesn't get re-scanned.
+        private static readonly Dictionary<string, Type?> _typeCache =
+            new Dictionary<string, Type?>();
+
         private static Type? FindType(string name)
         {
+            if (_typeCache.TryGetValue(name, out var cached)) return cached;
+
+            Type? found = null;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                var t = asm.GetType(name);
-                if (t != null) return t;
+                found = asm.GetType(name);
+                if (found != null) break;
             }
-            return null;
+            _typeCache[name] = found;
+            return found;
         }
 
         // Slow path used ONLY from the dump — iterates all types in all assemblies
@@ -2729,6 +2637,15 @@ namespace WardenOfTheWilds.Patches
                 if (_lastProactiveTimes.TryGetValue(workerKey, out float lastPro)
                     && Time.time - lastPro < 15f) return;
 
+                // Stamp the cooldown BEFORE the scan. Previously this was only
+                // stamped after a successful threat-command, which meant idle
+                // hunters (no nearby threats) scanned on every sub-task tick —
+                // 14 hunters × 10-20 ticks/s × threat-iterate-all-animals =
+                // visible frame stutter every ~1.5s. Stamping unconditionally
+                // caps the scan to once per 15s per hunter regardless of
+                // outcome.
+                _lastProactiveTimes[workerKey] = Time.time;
+
                 // Find nearest predator in work radius (reuse hBuilding / hRadius from top)
                 Component? threat = FindNearestThreatInRadius(
                     hunter.transform.position, hRadius);
@@ -2741,7 +2658,6 @@ namespace WardenOfTheWilds.Patches
                 if (!commanded) return;
 
                 __result = false;  // stop wandering — target acquired
-                _lastProactiveTimes[workerKey] = Time.time;
 
                 MelonLogger.Msg(
                     $"[WotW] Proactive engage: '{hunter.gameObject.name}' → " +
@@ -2773,7 +2689,11 @@ namespace WardenOfTheWilds.Patches
 
         private static readonly Dictionary<int, float> _lastChaseBreakTimes =
             new Dictionary<int, float>();
-        private const float ChaseBreakCooldown = 3f;  // anti-thrash
+        // Bumped 3s → 20s: the kiting AI was re-chasing within the 3s window,
+        // causing the leash to re-fire repeatedly (visible as 1-2s stutter in
+        // the log). 20s gives the retreat a chance to actually complete before
+        // re-evaluation. Kiting's own target logic will still handle combat.
+        private const float ChaseBreakCooldown = 20f;
 
         private static bool EvaluateChaseSafety(
             Component hunter, Component? hBuilding, float hRadius)
@@ -2801,10 +2721,13 @@ namespace WardenOfTheWilds.Patches
                         {
                             SetMovementTarget(hunter, hBuilding.transform.position,
                                 forceRetreat: true);
+                            // Also clear the combat target so kiting AI doesn't
+                            // immediately re-engage and fight the retreat.
+                            ClearCombatTarget(hunter);
                             _lastChaseBreakTimes[hKey] = Time.time;
-                            MelonLogger.Msg(
-                                $"[WotW] Chase break (leash): '{hunter.gameObject.name}' " +
-                                $"{distFromCabin:F0}u from cabin > {leash:F0}u limit — retreating");
+                            // Log removed — leash was firing in tight loops
+                            // (10+ times per hunter over a few minutes), each
+                            // log call contributing to visible frame stutter.
                             return true;
                         }
                     }
@@ -2848,7 +2771,11 @@ namespace WardenOfTheWilds.Patches
         // Refreshes every CacheTTL seconds; all consumers share the snapshot.
         private static AggressiveAnimal[] _cachedAggressive = System.Array.Empty<AggressiveAnimal>();
         private static float _aggressiveCacheExpiry = 0f;
-        private const float AggressiveCacheTTL = 0.75f;
+        // 2s TTL — animals move slowly enough that a 2-second lag is imperceptible
+        // for chase-safety / proactive-engagement decisions, and this cache fires
+        // every tick from EvaluateChaseSafety during active hunts. 0.75s produced
+        // ~1.3Hz FindObjectsOfType scans and was the main combat-era stutter source.
+        private const float AggressiveCacheTTL = 2.0f;
 
         public static AggressiveAnimal[] GetCachedAggressiveAnimals()
         {
@@ -2939,8 +2866,7 @@ namespace WardenOfTheWilds.Patches
 
         /// <summary>
         /// Finds the nearest Bear, Wolf, or Boar within radius of pos.
-        /// Does a fresh FindObjectsOfType scan for each animal type (Bear/Wolf/Boar).
-        /// Called once per building per 2.5s scan tick — not a hot path.
+        /// Reads from the shared AggressiveAnimal snapshot (no dedicated scan).
         /// </summary>
         private static Component? FindNearestThreatInRadius(Vector3 pos, float radius)
         {
@@ -2950,30 +2876,14 @@ namespace WardenOfTheWilds.Patches
                 Component? best     = null;
                 float      bestDist = radiusSqr;
 
-                foreach (string typeName in new[] { "Bear", "Wolf", "Boar" })
+                foreach (var animal in GetCachedAggressiveAnimals())
                 {
-                    // Reuse the BGH scan cache when available to avoid redundant
-                    // FindObjectsOfType calls on the same tick.
-                    if (!_animalScanCache.TryGetValue(typeName, out var animalList))
-                    {
-                        animalList = new List<Component>();
-                        Type? animalType = FindType(typeName);
-                        if (animalType != null)
-                            foreach (UnityEngine.Object obj in
-                                UnityEngine.Object.FindObjectsOfType(animalType))
-                            {
-                                var c = obj as Component;
-                                if (c != null) animalList.Add(c);
-                            }
-                        _animalScanCache[typeName] = animalList;
-                    }
+                    if (animal == null) continue;
+                    string name = animal.GetType().Name;
+                    if (name != "Bear" && name != "Wolf" && name != "Boar") continue;
 
-                    foreach (var c in animalList)
-                    {
-                        if (c == null) continue;
-                        float dSqr = (c.transform.position - pos).sqrMagnitude;
-                        if (dSqr < bestDist) { bestDist = dSqr; best = c; }
-                    }
+                    float dSqr = (animal.transform.position - pos).sqrMagnitude;
+                    if (dSqr < bestDist) { bestDist = dSqr; best = animal; }
                 }
                 return best;
             }

@@ -82,17 +82,21 @@ namespace WardenOfTheWilds.Patches
             // when TrapperLodge is chosen — no Harmony patch needed here.
             MelonLogger.Msg("[WotW] HunterCabinPatches: trap interval set by Enhancement on path selection (OK).");
 
-            // ── Patch 1b: Willow trap discount (Tended Wilds companion) ──────────
-            // OnStorageChanged fires when a hunter deposits a carcass — we use it
-            // to check willow stock and log the discount opportunity.
-            // Full discount implementation requires a crafting recipe patch (future).
-            var storageChanged = hunterType.GetMethod("OnStorageChanged", AllInstance);
-            if (storageChanged != null)
+            // ── Patch 1c: Trapper spawn-interval re-apply ────────────────────
+            // Vanilla UpdateTrappingPoints recalculates trappingCarcassSpawnInterval
+            // on any work-area change, clobbering our TrapperLodge divider.
+            // Postfix detects + restores.
+            var updateTrapsMethod = AccessTools.Method(hunterType, "UpdateTrappingPoints");
+            if (updateTrapsMethod != null)
             {
-                harmony.Patch(storageChanged, postfix: new HarmonyMethod(
+                harmony.Patch(updateTrapsMethod, postfix: new HarmonyMethod(
                     typeof(HunterCabinPatches).GetMethod(
-                        nameof(OnHuntCompletedPostfix), AllStatic)));
-                MelonLogger.Msg("[WotW] Patched HunterBuilding.OnStorageChanged (willow discount check)");
+                        nameof(UpdateTrappingPointsPostfix), AllStatic)));
+                MelonLogger.Msg("[WotW] Patched HunterBuilding.UpdateTrappingPoints (Trapper interval re-apply)");
+            }
+            else
+            {
+                MelonLogger.Warning("[WotW] HunterCabinPatches: UpdateTrappingPoints not found.");
             }
 
             // ── Patch 2: Building rename at T2 ───────────────────────────────
@@ -125,30 +129,20 @@ namespace WardenOfTheWilds.Patches
         // ── Patch implementations ─────────────────────────────────────────────
 
         /// <summary>
-        /// Postfix on HunterBuilding.OnStorageChanged().
-        /// Fires when a hunter deposits carcasses. Used for Tended Wilds willow
-        /// trap discount check (full recipe discount requires a future crafting patch).
+        /// Postfix on HunterBuilding.UpdateTrappingPoints — restores our
+        /// Trapper-path interval divider after vanilla recalculates.
         /// </summary>
-        public static void OnHuntCompletedPostfix(object __instance)
+        public static void UpdateTrappingPointsPostfix(object __instance)
         {
             try
             {
                 var comp = __instance as Component;
-                if (comp == null) return;
-
-                var enhancement = comp.GetComponent<HunterCabinEnhancement>();
-                if (enhancement == null) return;
-
-                // Willow trap discount check (TrapperLodge + Tended Wilds)
-                if (enhancement.Path == HunterT2Path.TrapperLodge &&
-                    WardenOfTheWildsMod.TendedWildsActive)
-                {
-                    ApplyWillowTrapDiscount(comp);
-                }
+                var enh = comp?.GetComponent<HunterCabinEnhancement>();
+                enh?.ReapplyTrapSpawnIntervalAfterVanillaUpdate();
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[WotW] OnHuntCompletedPostfix: {ex.Message}");
+                MelonLogger.Warning($"[WotW] UpdateTrappingPointsPostfix: {ex.Message}");
             }
         }
 
@@ -182,29 +176,5 @@ namespace WardenOfTheWilds.Patches
             }
         }
 
-        // ── Willow trap discount (Tended Wilds companion) ─────────────────────
-        // When Tended Wilds is active and this Trapper Lodge has cultivated Willow
-        // nearby, iron trap cost is reduced (or willow traps are unlocked as free).
-        private static void ApplyWillowTrapDiscount(Component hunterComp)
-        {
-            try
-            {
-                int willowStock = Systems.TendedWildsCompat.GetWillowStockNear(
-                    hunterComp.transform.position, 60f);
-
-                if (willowStock > 0)
-                {
-                    // TODO: Apply iron cost reduction to trap crafting recipe.
-                    // Requires knowing how HunterCabin manages trap iron costs.
-                    MelonLogger.Msg(
-                        $"[WotW] Willow available ({willowStock}u) near Trapper Lodge at " +
-                        $"{hunterComp.transform.position} — trap discount applicable.");
-                }
-            }
-            catch (Exception ex)
-            {
-                MelonLogger.Warning($"[WotW] ApplyWillowTrapDiscount: {ex.Message}");
-            }
-        }
     }
 }

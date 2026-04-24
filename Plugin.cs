@@ -9,28 +9,18 @@ using WardenOfTheWilds.Systems;
 using WardenOfTheWilds.Patches;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Stalk & Smoke  v0.1.0
-//  A Farthest Frontier overhaul mod by SageDragoon
-//  Companion mod to Tended Wilds — both mods enhance each other when active.
+//  Warden of the Wilds  v0.1.0
+//  A Farthest Frontier hunter + fishing overhaul by SageDragoon
 //
 //  Overview:
 //    • Hunter Cabin: Fix Lodge upgrade regression; branching T2 paths
 //      (Trapper Lodge = pelts/furs focus | Hunting Lodge = meat/big game focus);
 //      multi-worker at T2; optional manual trap placement.
-//    • Deer Stands: Cheap placeable structures unlocked by Hunting Lodge.
-//      Placed near farms they attract deer, turning a crop-raiding nuisance
-//      into a managed hunting resource. Lure toggle adds risk/reward.
+//    • Hunter combat AI: kiting, retreat-to-cabin, reemergence, proactive
+//      engagement scans, ambush detection, pursuit leash.
 //    • Fishing Shack: Tier 2 Fishing Dock with +50 % base output, 2-worker
-//      support, and a new Fish Oil byproduct for use as fertilizer or trade.
-//    • Smokehouse: Work-area radius (workers only collect within radius);
-//      source pinning to specific Hunter Cabins / Fishing Shacks; smarter
-//      idle fallback; clearer UI tooltips.
-//    • Tended Wilds companion synergies (active only when TW is loaded):
-//      - Cultivated berries/greens near Deer Stand → attraction bonus
-//      - Willow stock at ForagerShack → cheaper willow trap crafting
-//      - Fish Oil → fertilizer for cultivated ForagerShack plots
-//      - Herb/mushroom supply near Smokehouse → herb-cured smoked goods
-//        (gains food variety bonus tag)
+//      support, Angler/Creeler mode system, Sustainable Fishing tech rework.
+//    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
 [assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "0.1.0", "SageDragoon")]
@@ -49,10 +39,30 @@ namespace WardenOfTheWilds
         public static bool TendedWildsActive { get; private set; } = false;
 
         // ── Feature toggles ───────────────────────────────────────────────────
+        // TOP-LEVEL — disable an entire area of the mod.
         public static MelonPreferences_Entry<bool> HunterOverhaulEnabled   { get; private set; } = null!;
         public static MelonPreferences_Entry<bool> FishingOverhaulEnabled  { get; private set; } = null!;
-        public static MelonPreferences_Entry<bool> SmokehouseOverhaulEnabled { get; private set; } = null!;
-        public static MelonPreferences_Entry<bool> DeerStandsEnabled       { get; private set; } = null!;
+
+        // SUB-SYSTEM — finer-grained toggles for diagnosis. Each can be turned
+        // off independently to isolate a performance issue. Top-level toggles
+        // above still gate the whole area; these only matter when top-level
+        // is ON.
+        /// <summary>Kiting AI, proactive engagement scans, post-shot retreat,
+        /// chase-safety/leash, multi-predator retreat. The "smart combat" layer
+        /// on top of vanilla. Suspect #1 for combat-era stutter.</summary>
+        public static MelonPreferences_Entry<bool> HunterCombatEnabled { get; private set; } = null!;
+        /// <summary>Per-frame keybind polling (Ctrl+K rally, Alt+K return home,
+        /// Ctrl+K select-all). Cheap but fires every frame.</summary>
+        public static MelonPreferences_Entry<bool> HunterRallyEnabled { get; private set; } = null!;
+        /// <summary>Big Game Hunter / Trap Master button UI injection +
+        /// slider pin. OnGUI overlay on the hunter shack.</summary>
+        public static MelonPreferences_Entry<bool> HunterUIEnabled { get; private set; } = null!;
+        /// <summary>Angler / Creeler slider button UI injection. Tooltip
+        /// rendering, mode-change events, OnGUI overhead.</summary>
+        public static MelonPreferences_Entry<bool> FishingUIEnabled { get; private set; } = null!;
+        /// <summary>Tech tree patch (Sustainable Fishing value + description).
+        /// Runs once on map load; normally zero runtime cost.</summary>
+        public static MelonPreferences_Entry<bool> TechTreePatchEnabled { get; private set; } = null!;
 
         // ── Hunter config ─────────────────────────────────────────────────────
         /// <summary>Work radius multiplier for Hunting Lodge (1.0 = vanilla).</summary>
@@ -64,20 +74,42 @@ namespace WardenOfTheWilds
         /// Trapper Lodge raises this to let the trapper run multiple lines simultaneously.
         /// Confirmed: vanilla userDefinedMaxDeployedTraps = 1 (T2 only — T1 has no traps).</summary>
         public static MelonPreferences_Entry<int>   TrapperLodgeTrapCount   { get; private set; } = null!;
-        /// <summary>Tallow bonus multiplier when a Smokehouse processes Boar or Bear carcasses.
-        /// Boar and Bear are the primary tallow sources — hunted by Hunting Lodge.</summary>
-        public static MelonPreferences_Entry<float> BoarBearTallowMult      { get; private set; } = null!;
         /// <summary>Small meat bonus for Hunting Lodge hunters (main benefit is radius + 2 workers).</summary>
         public static MelonPreferences_Entry<float> HuntingLodgeMeatMult    { get; private set; } = null!;
         /// <summary>Additional multiplier on ALL outputs (meat+tallow+pelt) for bear carcasses.
         /// Bears are rare and dangerous — this stacks on top of other bonuses to represent
         /// the exceptional value of a successful bear hunt.</summary>
         public static MelonPreferences_Entry<float> BearMegaYieldMult       { get; private set; } = null!;
+        /// <summary>Bonus meat deposited into the killing BGH hunter's cabin when a bear dies.
+        /// Stacks on top of the vanilla butcher yield from the carcass itself (~30 meat).
+        /// 220 bonus + 30 butcher ≈ 250 meat per bear kill total.</summary>
+        public static MelonPreferences_Entry<int>   BGHBearBonusMeat       { get; private set; } = null!;
+        /// <summary>Bonus pelts (ItemHide) deposited into the killing BGH hunter's cabin when
+        /// a bear dies. Stacks on top of the vanilla butcher yield (~2 hide).
+        /// 3 bonus + 2 butcher ≈ 5 pelts per bear kill total.</summary>
+        public static MelonPreferences_Entry<int>   BGHBearBonusPelt       { get; private set; } = null!;
+        /// <summary>Bonus tallow deposited into the killing BGH hunter's cabin when a bear dies.
+        /// Stacks on top of the vanilla butcher yield (~3 tallow).
+        /// 5 bonus + 3 butcher ≈ 8 tallow per bear kill total.</summary>
+        public static MelonPreferences_Entry<int>   BGHBearBonusTallow     { get; private set; } = null!;
         /// <summary>Trap spawn interval multiplier bonus when Trapper Lodge is within
         /// range of a water body. Historically trappers set lines near rivers/streams.</summary>
         public static MelonPreferences_Entry<float> TrapperWaterBonus       { get; private set; } = null!;
         /// <summary>Radius within which a water body counts as "near" the Trapper Lodge.</summary>
         public static MelonPreferences_Entry<float> TrapperWaterBonusRadius { get; private set; } = null!;
+        /// <summary>Trap Master traps tick faster than vanilla. This multiplier is applied
+        /// on top of the pelt mult — combined effect shortens the spawn interval further.
+        /// 1.25 = 25% faster trap ticks (interval ÷ 1.25).</summary>
+        public static MelonPreferences_Entry<float> TrapMasterSpeedMult     { get; private set; } = null!;
+        /// <summary>Minimum number of water tiles (sampled on a grid within hunting radius)
+        /// required to trigger the Trap Master water pelt bonus. Maps with extensive
+        /// lakefront or river coverage reward placing the lodge near water.</summary>
+        public static MelonPreferences_Entry<int>   TrapperWaterTileThreshold { get; private set; } = null!;
+        /// <summary>Chance (0-1) per trap carcass spawn that the trap catches a bear instead.
+        /// On success, bonus meat/hide/tallow are injected directly into the cabin's
+        /// manufacturingStorage (same amounts as BGH bear kill bonus). Passive bear income
+        /// for the Trap Master path — no combat required.</summary>
+        public static MelonPreferences_Entry<float> TrapMasterBearChance    { get; private set; } = null!;
 
         // ── Small-game unlock (fox + groundhog) ──────────────────────────────
         /// <summary>When true, foxes spawn in-world using their normal biome rules
@@ -189,33 +221,83 @@ namespace WardenOfTheWilds
         /// 3 = tolerate one straggler. Set 99 to disable the check.</summary>
         public static MelonPreferences_Entry<int>   HunterAmbushThreshold        { get; private set; } = null!;
 
-        // ── Deer Stand config ─────────────────────────────────────────────────
-        /// <summary>Radius within which a Deer Stand attracts game (world units).</summary>
-        public static MelonPreferences_Entry<float> DeerStandAttractionRadius { get; private set; } = null!;
-        /// <summary>Bonus multiplier when stand is within farm plot proximity.</summary>
-        public static MelonPreferences_Entry<float> DeerStandFarmBonus        { get; private set; } = null!;
-        /// <summary>Additional bonus when Lure mode is active on the stand.</summary>
-        public static MelonPreferences_Entry<float> DeerStandLureBonus        { get; private set; } = null!;
-        /// <summary>Key to toggle Lure mode on a selected Deer Stand.</summary>
-        public static MelonPreferences_Entry<string> DeerStandLureKeyName     { get; private set; } = null!;
-
-        // ── Fishing Dock config ───────────────────────────────────────────────
-        /// <summary>Output multiplier at Fishing Dock (Tier 2). Stacks with tech.</summary>
+        // ── Fishing Shack mode config ────────────────────────────────────────
+        /// <summary>Output multiplier at Fishing Dock (Tier 2). Stacks with tech.
+        /// Legacy config — kept for FishingDock buildings (separate class from FishingShack).</summary>
         public static MelonPreferences_Entry<float> FishingDockOutputMult { get; private set; } = null!;
+        /// <summary>Catch multiplier for Angler mode rod fishing.
+        /// Applied via GetNumFishCaught postfix. 1.5 = 50% more fish per catch cycle.
+        /// Full Angler: both workers at this rate. Mixed: averaged with CreelerRodMult.</summary>
+        public static MelonPreferences_Entry<float> AnglerCatchMult { get; private set; } = null!;
+        /// <summary>Timer reduction for Angler mode. Multiplied against vanilla 28-32s
+        /// between-catch timer. 0.65 = 35% faster catches (~18-21s). Lower = faster.</summary>
+        public static MelonPreferences_Entry<float> AnglerTimerReduction { get; private set; } = null!;
+        /// <summary>Bonus carry capacity for Angler workers. Added to vanilla fishCapacity (25).
+        /// 15 = carry 40 fish before returning (fewer return trips).</summary>
+        public static MelonPreferences_Entry<int>   AnglerCapacityBonus { get; private set; } = null!;
+        /// <summary>Rod-fishing output multiplier for Creeler workers.
+        /// Creelers spend time on traps, reducing their rod-fishing yield.
+        /// Real Creeler output comes from the daily-tick trap system.
+        /// 0.5 = 50% reduced rod-fishing. 0 = no rod output at all.</summary>
+        public static MelonPreferences_Entry<float> CreelerRodMult { get; private set; } = null!;
+        /// <summary>Days between Creeler trap spawns. Each Creeler worker slot produces
+        /// CrabTrapFishPerSpawn fish every this many days. Lower = faster income.
+        /// Water tile bonus divides this further on water-heavy maps.</summary>
+        public static MelonPreferences_Entry<int>   CrabTrapSpawnDays { get; private set; } = null!;
+        /// <summary>Fish produced per Creeler slot per spawn event. At default 4 fish
+        /// every 5 days with 2 Creeler slots: ~584 fish/year passive income.</summary>
+        public static MelonPreferences_Entry<int>   CrabTrapFishPerSpawn { get; private set; } = null!;
+        /// <summary>Number of physical creel traps a Creeler-mode fishing shack deploys
+        /// in water within its fishing radius. Recommended range 4-6.</summary>
+        public static MelonPreferences_Entry<int>   CreelerTrapCount { get; private set; } = null!;
+        /// <summary>Fishing radius multiplier for Creeler mode. Creeler traps spread
+        /// across a larger water area. 2.0 = 60u (vanilla 30u). Affects which water
+        /// tiles are counted for the water bonus and which fishing areas are used.</summary>
+        public static MelonPreferences_Entry<float> CreelerRadiusMult { get; private set; } = null!;
+        /// <summary>Minimum water tiles within the fishing radius to activate the
+        /// Creeler water bonus. Maps with large deep lakes reward Creeler placement.
+        /// 15 tiles on 8u grid = a moderate lake shoreline.</summary>
+        public static MelonPreferences_Entry<int>   CreelerWaterTileThreshold { get; private set; } = null!;
+        /// <summary>Trap spawn interval divisor when water bonus is active.
+        /// 1.25 = 25% faster trap ticks on water-rich maps. Stacks with
+        /// base CrabTrapSpawnDays — at default values: 5d / 1.25 = 4d interval.</summary>
+        public static MelonPreferences_Entry<float> CreelerWaterTileBonus { get; private set; } = null!;
+        /// <summary>Fish replenish rate bonus applied to the Sustainable Fishing tech node.
+        /// Vanilla is 0.3 (30%). We bump to 0.5 (50%) to make the node worth investing in.</summary>
+        public static MelonPreferences_Entry<float> FishReplenishOverride { get; private set; } = null!;
+        /// <summary>Storage capacity for fishing shacks (vanilla = 100).
+        /// Set higher to match wagon capacity for efficient logistics.</summary>
+        public static MelonPreferences_Entry<int> FishingShackStorageCap { get; private set; } = null!;
 
-        // ── Smokehouse config ─────────────────────────────────────────────────
-        /// <summary>Default work-area radius for Smokehouse (world units).</summary>
-        public static MelonPreferences_Entry<float> SmokehouseDefaultRadius { get; private set; } = null!;
+        // ── Tech tree state ───────────────────────────────────────────────────
+        private static bool _techTreePatched = false;
+        /// <summary>True once Sustainable Fishing has been researched. Checked by
+        /// FishingShackEnhancement to gate mode slider and buffs.</summary>
+        public static bool SustainableFishingResearched { get; private set; } = false;
+
+        /// <summary>
+        /// Fires exactly once when Sustainable Fishing is researched during a
+        /// session. UI (slider) subscribes to this instead of polling. The
+        /// firing is driven by TechResearchPatches's Harmony hook on the tech
+        /// node's rank setter.
+        /// </summary>
+        public static event System.Action OnSustainableFishingResearched;
+
+        /// <summary>Internal: set the research flag and fire the event exactly
+        /// once on transition from false → true.</summary>
+        internal static void SetSustainableFishingResearched(bool researched)
+        {
+            if (SustainableFishingResearched == researched) return;
+            SustainableFishingResearched = researched;
+            if (researched)
+            {
+                Log.Msg("[WotW] Sustainable Fishing researched — firing event.");
+                try { OnSustainableFishingResearched?.Invoke(); } catch { }
+            }
+        }
+
         /// <summary>Key name for cycling Hunter Lodge path. Default P.</summary>
         public static MelonPreferences_Entry<string> HunterPathKeyName     { get; private set; } = null!;
-
-        // ── Hunting Dog config ────────────────────────────────────────────────
-        /// <summary>Search radius multiplier for a Hunting Lodge with an assigned dog.
-        /// Dog sniffs out game — increases effective detection range.</summary>
-        public static MelonPreferences_Entry<float> HuntingDogSearchBonus   { get; private set; } = null!;
-        /// <summary>When true, Hunting Lodge dogs act as combat decoys after each shot,
-        /// intercepting the target animal while the hunter retreats to reload.</summary>
-        public static MelonPreferences_Entry<bool>  HuntingDogDecoyEnabled  { get; private set; } = null!;
 
         // ── Hunter danger detection config ────────────────────────────────────
         /// <summary>Radius (world units) within which a dangerous animal (Wolf/Boar/Bear)
@@ -232,7 +314,6 @@ namespace WardenOfTheWilds
         public static MelonPreferences_Entry<float> HuntingBlindGoldUpkeep  { get; private set; } = null!;
 
         // ── Resolved keybinds ─────────────────────────────────────────────────
-        public static KeyCode DeerStandLureKey { get; private set; } = KeyCode.L;
         public static KeyCode HunterPathKey    { get; private set; } = KeyCode.P;
 
         // ─────────────────────────────────────────────────────────────────────
@@ -266,16 +347,37 @@ namespace WardenOfTheWilds
                 description: "Enables Fishing Shack Tier 2 (Fishing Dock) with improved " +
                              "output, 2-worker support, and Fish Oil byproduct.");
 
-            SmokehouseOverhaulEnabled = cat.CreateEntry("SmokehouseOverhaulEnabled", true,
-                display_name: "Smokehouse Overhaul Enabled",
-                description: "Enables Smokehouse work-area radius and source pinning. " +
-                             "Workers will only collect from sources within their radius.");
+            // Sub-system diagnostics — disable individual parts of the mod
+            // to isolate a performance issue. These only matter when their
+            // parent top-level toggle is ON.
+            HunterCombatEnabled = cat.CreateEntry("HunterCombatEnabled", true,
+                display_name: "[Diag] Hunter Combat Enabled",
+                description: "When OFF, disables kiting AI, proactive engagement scans, " +
+                             "post-shot retreat, chase-safety/leash, and multi-predator " +
+                             "retreat. Vanilla combat remains. Suspect #1 for combat stutter.");
 
-            DeerStandsEnabled = cat.CreateEntry("DeerStandsEnabled", true,
-                display_name: "Deer Stands Enabled",
-                description: "Enables placeable Deer Stands. Unlocked by Hunting Lodge (T2). " +
-                             "Stands near farms attract deer, converting crop-raiding into " +
-                             "a managed hunting resource.");
+            HunterRallyEnabled = cat.CreateEntry("HunterRallyEnabled", true,
+                display_name: "[Diag] Hunter Rally Hotkeys Enabled",
+                description: "When OFF, disables the per-frame hotkey polling (Ctrl+K, " +
+                             "Alt+K, etc.). No measurable cost normally, but can be turned " +
+                             "off to rule out OnUpdate overhead.");
+
+            HunterUIEnabled = cat.CreateEntry("HunterUIEnabled", true,
+                display_name: "[Diag] Hunter UI Enabled",
+                description: "When OFF, skips injecting Big Game Hunter / Trap Master " +
+                             "buttons and the trap-slider pin. Useful for isolating UI-layer " +
+                             "stutter.");
+
+            FishingUIEnabled = cat.CreateEntry("FishingUIEnabled", true,
+                display_name: "[Diag] Fishing UI Enabled",
+                description: "When OFF, skips injecting the Angler/Creeler button slider " +
+                             "and its tooltip. Useful for isolating UI-layer stutter.");
+
+            TechTreePatchEnabled = cat.CreateEntry("TechTreePatchEnabled", true,
+                display_name: "[Diag] Tech Tree Patch Enabled",
+                description: "When OFF, disables the Sustainable Fishing tech-node patch " +
+                             "(value bump + description override). Almost certainly not " +
+                             "the stutter source, but included for completeness.");
 
             // Hunter
             HuntingLodgeRadiusMult = cat.CreateEntry("HuntingLodgeRadiusMult", 1.35f,
@@ -297,12 +399,6 @@ namespace WardenOfTheWilds
                              "so 3 traps keeps the trapper continuously busy without idle time. " +
                              "Higher values extend reach but one trapper can only service so many lines.");
 
-            BoarBearTallowMult = cat.CreateEntry("BoarBearTallowMult", 1.5f,
-                display_name: "Boar/Bear Tallow Multiplier",
-                description: "Tallow output multiplier when a Smokehouse processes Boar or Bear carcasses. " +
-                             "Boar and Bear are the primary tallow sources — this bonus applies at the " +
-                             "Smokehouse, not the Hunter Cabin. 1.5 = 50% more tallow from large game.");
-
             HuntingLodgeMeatMult = cat.CreateEntry("HuntingLodgeMeatMult", 1.15f,
                 display_name: "Hunting Lodge Meat Multiplier",
                 description: "Small meat yield multiplier for Hunting Lodge hunters. The main benefit " +
@@ -317,6 +413,26 @@ namespace WardenOfTheWilds
                              "game carcass would after other bonuses. Represents the exceptional value " +
                              "of a successful bear hunt.");
 
+            BGHBearBonusMeat = cat.CreateEntry("BGHBearBonusMeat", 220,
+                display_name: "BGH Bear Bonus — Meat",
+                description: "Bonus meat (ItemMeat) deposited directly into the killing BGH hunter's " +
+                             "cabin when a bear is killed. Stacks on top of the carcass-butcher yield " +
+                             "(vanilla generic carcass ≈ 30 meat). Default 220 + 30 ≈ 250 meat/bear. " +
+                             "Only applies to Hunting Lodge (BGH) hunters — T1 and Trapper paths " +
+                             "use vanilla carcass-only yield.");
+
+            BGHBearBonusPelt = cat.CreateEntry("BGHBearBonusPelt", 3,
+                display_name: "BGH Bear Bonus — Pelt",
+                description: "Bonus pelts (ItemHide — FF calls pelts 'hides' internally) deposited " +
+                             "into the killing BGH hunter's cabin when a bear is killed. Stacks on " +
+                             "the butcher yield (≈ 2 hide). Default 3 + 2 ≈ 5 pelts/bear. BGH only.");
+
+            BGHBearBonusTallow = cat.CreateEntry("BGHBearBonusTallow", 5,
+                display_name: "BGH Bear Bonus — Tallow",
+                description: "Bonus tallow (ItemTallow) deposited into the killing BGH hunter's " +
+                             "cabin when a bear is killed. Stacks on the butcher yield (≈ 3 tallow). " +
+                             "Default 5 + 3 ≈ 8 tallow/bear. BGH only.");
+
             TrapperWaterBonus = cat.CreateEntry("TrapperWaterBonus", 1.25f,
                 display_name: "Trapper Lodge Water Proximity Bonus",
                 description: "Pelt yield bonus when a Trapper Lodge is near a water body. " +
@@ -327,6 +443,27 @@ namespace WardenOfTheWilds
                 display_name: "Trapper Water Bonus Detection Radius",
                 description: "World-unit radius within which a water body triggers the Trapper " +
                              "Lodge water proximity bonus.");
+
+            TrapMasterSpeedMult = cat.CreateEntry("TrapMasterSpeedMult", 1.25f,
+                display_name: "Trap Master Speed Multiplier",
+                description: "Trap Master traps tick this much faster than vanilla. Stacks with " +
+                             "pelt mult to shorten spawn interval. 1.25 = 25% faster trap ticks " +
+                             "(a 26-day vanilla interval becomes ~21 days before pelt mult).");
+
+            TrapperWaterTileThreshold = cat.CreateEntry("TrapperWaterTileThreshold", 15,
+                display_name: "Trap Master Water Tile Threshold",
+                description: "Minimum water tiles within the cabin's hunting radius required " +
+                             "to activate the water pelt bonus. Sampled on a grid at path " +
+                             "selection time. Maps with extensive lakefront or rivers reward " +
+                             "placing the lodge near water. 15 tiles ≈ a moderate lake edge.");
+
+            TrapMasterBearChance = cat.CreateEntry("TrapMasterBearChance", 0.03f,
+                display_name: "Trap Master Bear Trap Chance",
+                description: "Chance (0.0–1.0) per trap carcass spawn that the Trap Master " +
+                             "catches a bear instead of the usual small game. On success, " +
+                             "bonus meat/hide/tallow (same amounts as BGH bear bonus config) " +
+                             "are deposited directly into the cabin. Passive bear income — " +
+                             "no combat required. 0.03 = 3% per catch.");
 
             UnlockFoxSpawns = cat.CreateEntry("UnlockFoxSpawns", true,
                 display_name: "Unlock Fox Spawns",
@@ -515,22 +652,6 @@ namespace WardenOfTheWilds
                              "triggers a retreat. 2 = current target + one other = retreat. " +
                              "3 = tolerate one straggler. 99 = disable the check entirely.");
 
-            // Hunting Dog (pre-wired for Crate's upcoming cat/dog content update)
-            HuntingDogSearchBonus = cat.CreateEntry("HuntingDogSearchBonus", 1.3f,
-                display_name: "Hunting Dog Search Radius Bonus",
-                description: "Multiplier applied to a Hunting Lodge's work radius when a dog " +
-                             "is assigned. Dogs sniff out game at greater range than unaided " +
-                             "hunters. 1.3 = 30% larger effective detection radius. " +
-                             "Requires Crate's dog content update to activate.");
-
-            HuntingDogDecoyEnabled = cat.CreateEntry("HuntingDogDecoyEnabled", true,
-                display_name: "Hunting Dog Combat Decoy Enabled",
-                description: "When true, an assigned Hunting Lodge dog intercepts dangerous game " +
-                             "(Boar/Wolf/Bear) after each hunter shot, drawing the animal's aggro " +
-                             "while the hunter retreats to reload from a safe distance. " +
-                             "This is the natural kiting solution — the dog tanks, the hunter shoots. " +
-                             "Requires Crate's dog content update and confirmed pet API methods.");
-
             // Hunter danger detection
             HunterDangerRadius = cat.CreateEntry("HunterDangerRadius", 40f,
                 display_name: "Hunter Danger Detection Radius",
@@ -552,40 +673,79 @@ namespace WardenOfTheWilds
                              "Mirrors the guard tower civilian-worker model. Set to 0 to disable " +
                              "upkeep entirely. Requires guard tower upkeep field from dump.");
 
-            // Deer stands
-            DeerStandAttractionRadius = cat.CreateEntry("DeerStandAttractionRadius", 40f,
-                display_name: "Deer Stand Attraction Radius",
-                description: "World-unit radius within which a Deer Stand increases " +
-                             "the probability of deer spawning or lingering.");
-
-            DeerStandFarmBonus = cat.CreateEntry("DeerStandFarmBonus", 1.5f,
-                display_name: "Deer Stand Farm Proximity Bonus",
-                description: "Attraction multiplier when a Deer Stand is placed within " +
-                             "40u of a farm plot. Deer are drawn to crops — use this " +
-                             "to turn a problem into a food source.");
-
-            DeerStandLureBonus = cat.CreateEntry("DeerStandLureBonus", 1.3f,
-                display_name: "Deer Stand Lure Mode Bonus",
-                description: "Additional attraction multiplier when Lure mode is active. " +
-                             "Lure mode risks slightly higher crop-nibbling near farms.");
-
-            DeerStandLureKeyName = cat.CreateEntry("DeerStandLureKey", "L",
-                display_name: "Deer Stand Lure Toggle Key",
-                description: "While a Deer Stand is selected, press this key to toggle " +
-                             "Lure mode on/off. Use Unity KeyCode name (e.g. L, F, Tab).");
-
-            // Fishing
+            // Fishing — mode system
             FishingDockOutputMult = cat.CreateEntry("FishingDockOutputMult", 1.5f,
                 display_name: "Fishing Dock Output Multiplier",
-                description: "Fish output multiplier at Tier 2 Fishing Dock. " +
-                             "1.5 = 50% more fish, bringing it in line with other food sources.");
+                description: "Fish output multiplier at Tier 2 Fishing Dock (separate building). " +
+                             "1.5 = 50% more fish. Legacy config for FishingDock buildings.");
 
-            // Smokehouse
-            SmokehouseDefaultRadius = cat.CreateEntry("SmokehouseDefaultRadius", 55f,
-                display_name: "Smokehouse Default Work Radius",
-                description: "Default radius (world units) within which a Smokehouse " +
-                             "worker will collect raw meat and fish. Workers ignore " +
-                             "buildings outside this radius, preventing map-wide travel.");
+            AnglerCatchMult = cat.CreateEntry("AnglerCatchMult", 1.5f,
+                display_name: "Angler Catch Multiplier",
+                description: "Catch output multiplier for Angler mode workers. Applied per " +
+                             "fishing cycle via GetNumFishCaught. 1.5 = 50% more fish per catch.");
+
+            AnglerTimerReduction = cat.CreateEntry("AnglerTimerReduction", 0.65f,
+                display_name: "Angler Timer Reduction",
+                description: "Timer multiplier for Angler mode. Vanilla timer is 28-32s between " +
+                             "catches. 0.65 = 35% faster (~18-21s). Lower = faster fishing cycles.");
+
+            AnglerCapacityBonus = cat.CreateEntry("AnglerCapacityBonus", 15,
+                display_name: "Angler Carry Capacity Bonus",
+                description: "Extra fish carry capacity for Angler workers. Vanilla = 25. " +
+                             "15 bonus = 40 total. Fewer return trips = more time fishing.");
+
+            CreelerRodMult = cat.CreateEntry("CreelerRodMult", 0.5f,
+                display_name: "Creeler Rod Fishing Multiplier",
+                description: "Rod-fishing output multiplier for Creeler workers. Creelers spend " +
+                             "time maintaining traps, reducing their rod output. Real income comes " +
+                             "from the daily-tick trap system. 0.5 = 50% reduced rod fishing.");
+
+            CrabTrapSpawnDays = cat.CreateEntry("CrabTrapSpawnDays", 8,
+                display_name: "Crab Trap Spawn Interval (days)",
+                description: "Days between Creeler trap production ticks. Each Creeler worker slot " +
+                             "produces CrabTrapFishPerSpawn fish every this many days, auto-deposited " +
+                             "into the shack's storage (abstracting fisherman collection time). " +
+                             "Water tile bonus divides this further on water-heavy maps. " +
+                             "Default 8 days accounts for collection time; lower = faster income.");
+
+            CrabTrapFishPerSpawn = cat.CreateEntry("CrabTrapFishPerSpawn", 4,
+                display_name: "Crab Trap Fish Per Spawn",
+                description: "Fish produced per Creeler slot per spawn event. 2 Creeler slots " +
+                             "at 4 fish / 5 days = ~584 fish/year passive. Tune down if too strong.");
+
+            CreelerTrapCount = cat.CreateEntry("CreelerTrapCount", 5,
+                display_name: "Creeler Trap Count",
+                description: "Number of physical creel traps a Creeler-mode fishing shack " +
+                             "deploys in water within its fishing radius. Recommended range 4-6. " +
+                             "Each trap independently accumulates fish on a 5-day cycle and is " +
+                             "harvested by the shack's fishermen.");
+
+            CreelerRadiusMult = cat.CreateEntry("CreelerRadiusMult", 2.0f,
+                display_name: "Creeler Radius Multiplier",
+                description: "Fishing radius multiplier when any Creeler slot is active. " +
+                             "2.0 = 60u (vanilla 30u). Creeler traps spread across wider water. " +
+                             "More water tiles in range = better water bonus.");
+
+            CreelerWaterTileThreshold = cat.CreateEntry("CreelerWaterTileThreshold", 15,
+                display_name: "Creeler Water Tile Threshold",
+                description: "Minimum water tiles within expanded radius to activate the " +
+                             "Creeler water bonus. 15 on 8u grid = moderate lake edge. " +
+                             "Big deep lakes easily exceed this — the Creeler's home turf.");
+
+            CreelerWaterTileBonus = cat.CreateEntry("CreelerWaterTileBonus", 1.25f,
+                display_name: "Creeler Water Tile Bonus",
+                description: "Trap spawn interval divisor when water bonus active. " +
+                             "1.25 = 25% faster trap ticks. At defaults: 5d / 1.25 = 4d interval.");
+
+            FishReplenishOverride = cat.CreateEntry("FishReplenishOverride", 0.5f,
+                display_name: "Fish Replenish Rate (Tech Node)",
+                description: "Overrides the Sustainable Fishing tech node's fish replenish " +
+                             "rate bonus. Vanilla = 0.3 (30%). Default 0.5 (50%).");
+
+            FishingShackStorageCap = cat.CreateEntry("FishingShackStorageCap", 200,
+                display_name: "Fishing Shack Storage Capacity",
+                description: "Fish storage capacity per shack. Vanilla = 100. " +
+                             "Set to 200 to match vanilla wagon load (~200 fish at weight 2).");
 
             HunterPathKeyName = cat.CreateEntry("HunterPathKey", "P",
                 display_name: "Hunter Lodge Path Cycle Key",
@@ -594,11 +754,6 @@ namespace WardenOfTheWilds
                              "Use Unity KeyCode name (e.g. P, Y, Tab).");
 
             // ── Parse keybinds ────────────────────────────────────────────────
-            if (Enum.TryParse(DeerStandLureKeyName.Value, ignoreCase: true, out KeyCode lureKey))
-                DeerStandLureKey = lureKey;
-            else
-                Log.Warning($"[WotW] Could not parse DeerStandLureKey \"{DeerStandLureKeyName.Value}\", defaulting to L.");
-
             if (Enum.TryParse(HunterPathKeyName.Value, ignoreCase: true, out KeyCode pathKey))
                 HunterPathKey = pathKey;
             else
@@ -612,16 +767,35 @@ namespace WardenOfTheWilds
 
             HunterCabinPatches.ApplyPatches(HarmonyInstance);
             HunterCombatPatches.ApplyPatches(HarmonyInstance);
-            HunterHotkeyPatches.ApplyPatches(HarmonyInstance);
             FishingShackPatches.ApplyPatches(HarmonyInstance);
-            SmokehousePatches.ApplyPatches(HarmonyInstance);
+            FishingShackLoadPatches.Register(HarmonyInstance);
 
-            Log.Msg($"[WotW] Stalk & Smoke 0.1.0 loaded." +
+            if (FishingUIEnabled.Value)
+                FishingModeSliderPatches.Register(HarmonyInstance);
+            else
+                Log.Msg("[WotW] FishingModeSliderPatches SKIPPED (FishingUIEnabled=false)");
+
+            if (HunterUIEnabled.Value)
+            {
+                HunterModeButtonPatches.Register(HarmonyInstance);
+                TrapSliderPinPatches.Register(HarmonyInstance);
+            }
+            else
+            {
+                Log.Msg("[WotW] HunterUI patches SKIPPED (HunterUIEnabled=false)");
+            }
+
+            LocalizationPatches.Apply(HarmonyInstance);
+
+            if (TechTreePatchEnabled.Value)
+                TechResearchPatches.Register(HarmonyInstance);
+            else
+                Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
+
+            Log.Msg($"[WotW] Warden of the Wilds 0.1.0 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
-                    $" | Fishing: {FishingOverhaulEnabled.Value}" +
-                    $" | Smokehouse: {SmokehouseOverhaulEnabled.Value}" +
-                    $" | DeerStands: {DeerStandsEnabled.Value}");
+                    $" | Fishing: {FishingOverhaulEnabled.Value}");
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
@@ -633,13 +807,8 @@ namespace WardenOfTheWilds
             // Reset per-scene state in all systems
             HunterCabinEnhancement.OnMapLoaded();
             FishingShackEnhancement.OnMapLoaded();
-            SmokehouseEnhancement.OnMapLoaded();
-            DeerStandSystem.OnMapLoaded();
             HuntingBlindSystem.OnMapLoaded();
-            HuntingDogSystem.OnMapLoaded();
             HunterCombatPatches.OnMapLoaded();
-            HunterHotkeyPatches.OnMapLoaded();
-            TendedWildsCompat.OnMapLoaded();
 
             // Unlock fox + groundhog spawns (override vanilla 1500-day delays)
             SmallGameUnlockSystem.OnMapLoaded();
@@ -649,14 +818,12 @@ namespace WardenOfTheWilds
 
             MelonCoroutines.Start(LateInit());
 
-            // Deer Stand attraction — runs every 8 s once scene settles (15 s head start)
-            if (DeerStandsEnabled.Value)
-                MelonCoroutines.Start(DeerStandSystem.AttractionWatcher());
+            // Tech tree modifications (Sustainable Fishing node)
+            _techTreePatched = false;
+            SustainableFishingResearched = false;
+            if (FishingOverhaulEnabled.Value && TechTreePatchEnabled.Value)
+                MelonCoroutines.Start(PatchTechTreeDelayed());
 
-            // Hunter danger proximity watch — runs every 2s, triggers retreat if
-            // a predator enters HunterDangerRadius before it can land a hit
-            if (HunterOverhaulEnabled.Value && HunterDangerRadius.Value > 0f)
-                MelonCoroutines.Start(HunterCombatPatches.DangerProximityWatcher());
         }
 
         /// <summary>
@@ -667,6 +834,7 @@ namespace WardenOfTheWilds
         public override void OnUpdate()
         {
             if (!HunterOverhaulEnabled.Value) return;
+            if (!HunterRallyEnabled.Value) return;
             HunterRallySystem.Tick();
         }
 
@@ -694,12 +862,162 @@ namespace WardenOfTheWilds
             Log.Warning("[WotW] LateInit: failed to find game buildings after all attempts.");
         }
 
+        // ── Tech Tree: Sustainable Fishing ──────────────────────────────────
+        private IEnumerator PatchTechTreeDelayed()
+        {
+            yield return new WaitForSeconds(5f);
+
+            int attempts = 0;
+            const int maxAttempts = 600; // 600 × 3s = 30 min
+            while (!_techTreePatched && attempts < maxAttempts)
+            {
+                attempts++;
+                bool done = TryPatchTechTree(attempts);
+                if (done) break;
+                yield return new WaitForSeconds(3f);
+            }
+
+            if (!_techTreePatched)
+                Log.Error("[WotW] PatchTechTree: Failed to patch Sustainable Fishing after 30 minutes.");
+        }
+
+        private bool TryPatchTechTree(int attempt)
+        {
+            const BindingFlags F = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            try
+            {
+                var gameManager = GameObject.FindObjectOfType<GameManager>();
+                if (gameManager == null) return false;
+
+                var techTreeManager = gameManager.techTreeManager;
+                if (techTreeManager == null) return false;
+
+                var nodeDataList = techTreeManager.techTreeNodeData;
+                if (nodeDataList == null || nodeDataList.Count == 0)
+                {
+                    Log.Warning($"[WotW] PatchTechTree: techTreeNodeData empty (attempt {attempt})");
+                    return false;
+                }
+
+                TechTreeNodeData fishingNode = null;
+                foreach (var node in nodeDataList)
+                {
+                    if (node.GetTechName() == "Sustainable Fishing")
+                    {
+                        fishingNode = node;
+                        break;
+                    }
+                }
+
+                if (fishingNode == null)
+                {
+                    Log.Warning($"[WotW] PatchTechTree: 'Sustainable Fishing' not found (attempt {attempt})");
+                    return false;
+                }
+
+                // ── Check if already researched ──
+                int curRank = 0;
+                int numRanks = fishingNode.GetNumRanks();
+                try
+                {
+                    var crField = fishingNode.GetType().GetField("<curRank>k__BackingField", F);
+                    if (crField != null) curRank = (int)crField.GetValue(fishingNode);
+                }
+                catch { }
+                bool researched = curRank >= numRanks && numRanks > 0;
+                SetSustainableFishingResearched(researched);
+                Log.Msg($"[WotW] PatchTechTree: Sustainable Fishing — ranks={numRanks}, curRank={curRank}, researched={researched}");
+
+                // ── Bump replenish value ──
+                if (fishingNode.gameEffectsEntries != null)
+                {
+                    var valueField = typeof(GameEffectEntry).GetField("_value", F);
+                    foreach (var entry in fishingNode.gameEffectsEntries)
+                    {
+                        if (entry.gameEffect != null &&
+                            entry.gameEffect.GetType().Name == "FishReplenishRateModify")
+                        {
+                            if (valueField != null)
+                            {
+                                float oldVal = entry.value;
+                                float newVal = FishReplenishOverride.Value;
+                                valueField.SetValue(entry, newVal);
+                                Log.Msg($"[WotW] PatchTechTree: Fish replenish {oldVal} -> {newVal}");
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // ── Register localization tag and set description override ──
+                const string descTag = "WotW_SustainableFishingDesc";
+                const string g = "<color=#9bff3a>"; // vanilla green highlight
+                const string w = "</color>";
+                string descText =
+                    $"{g}+50%{w} Fish Replenishment\n" +
+                    $"Unlocks {g}Angler{w} + {g}Creeler{w}\n" +
+                    $"{g}2x{w} Creeler Radius\n" +
+                    $"{g}+35%{w} Fishing Speed\n" +
+                    $"{g}+50%{w} Carry Capacity";
+
+                LocalizationPatches.Register(descTag, descText);
+
+                var descField = typeof(TechTreeNodeData).GetField("_descriptionTagOverride", F);
+                if (descField != null)
+                {
+                    descField.SetValue(fishingNode, descTag);
+                    // Hide the auto-generated "+50% Fish Replenishment" line so it's not duplicated
+                    var skipField = typeof(GameEffectEntry).GetField("_skipDescriptionDisplay", F);
+                    if (skipField != null && fishingNode.gameEffectsEntries != null)
+                    {
+                        foreach (var entry in fishingNode.gameEffectsEntries)
+                            skipField.SetValue(entry, true);
+                    }
+                    Log.Msg($"[WotW] PatchTechTree: registered '{descTag}' and set descriptionTagOverride");
+                }
+                else
+                {
+                    Log.Warning("[WotW] PatchTechTree: _descriptionTagOverride field not found");
+                }
+
+                _techTreePatched = true;
+                Log.Msg("[WotW] PatchTechTree: Sustainable Fishing modifications complete.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[WotW] PatchTechTree error (attempt {attempt}): {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Defensive re-check of research state. Normally the event-driven
+        /// path (TechResearchPatches → SetSustainableFishingResearched)
+        /// handles state changes automatically, but callers can invoke this
+        /// to force a resync in edge cases.
+        /// </summary>
+        public static void RefreshFishingTechState()
+        {
+            const BindingFlags F = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            try
+            {
+                var gm = GameObject.FindObjectOfType<GameManager>();
+                if (gm?.techTreeManager == null) return;
+                var ttm = gm.techTreeManager;
+
+                var field = ttm.GetType().GetField("geFishReplenishRateMultiplier", F);
+                if (field != null)
+                {
+                    float val = (float)field.GetValue(ttm);
+                    SetSustainableFishingResearched(val > 0f);
+                }
+            }
+            catch { }
+        }
+
         private bool TryAttachComponents()
         {
-            // TODO: Replace "HunterCabin", "FishingShack", "Smokehouse" with confirmed
-            // class names from Assembly-CSharp.dll decompilation.
-            // See DESIGN.md § Technical Notes for context.
-
             bool foundAny = false;
 
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
@@ -729,21 +1047,6 @@ namespace WardenOfTheWilds
                         if (go != null && go.GetComponent<FishingShackEnhancement>() == null)
                         {
                             go.AddComponent<FishingShackEnhancement>();
-                            foundAny = true;
-                        }
-                    }
-                }
-
-                // Smokehouse — NOTE: capital H confirmed from Assembly-CSharp.dll decompile
-                var smokeType = asm.GetType("SmokeHouse");
-                if (smokeType != null && SmokehouseOverhaulEnabled.Value)
-                {
-                    foreach (UnityEngine.Object obj in UnityEngine.Object.FindObjectsOfType(smokeType))
-                    {
-                        var go = (obj as Component)?.gameObject;
-                        if (go != null && go.GetComponent<SmokehouseEnhancement>() == null)
-                        {
-                            go.AddComponent<SmokehouseEnhancement>();
                             foundAny = true;
                         }
                     }

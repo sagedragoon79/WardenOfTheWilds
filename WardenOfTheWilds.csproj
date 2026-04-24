@@ -4,7 +4,10 @@
     <TargetFramework>net46</TargetFramework>
     <AssemblyName>WardenOfTheWilds</AssemblyName>
     <RootNamespace>WardenOfTheWilds</RootNamespace>
-    <Nullable>enable</Nullable>
+    <!-- Annotations only: keeps `?` and `= null!` syntax parseable but suppresses
+         null-reference-type warnings. Unity's ==null override and MonoBehaviour
+         lifecycle produce too many false positives for full nullable analysis. -->
+    <Nullable>annotations</Nullable>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <OutputPath>bin\$(Configuration)\</OutputPath>
@@ -48,6 +51,10 @@
       <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.UIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
       <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>false</Private>
@@ -70,6 +77,11 @@
     <!-- Game assembly -->
     <Reference Include="Assembly-CSharp">
       <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- ES2 (Easy Save 2) lives in firstpass; needed for Save/Load patches -->
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

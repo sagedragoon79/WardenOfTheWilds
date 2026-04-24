@@ -4,40 +4,26 @@ using UnityEngine;
 using System;
 using System.Reflection;
 using WardenOfTheWilds.Components;
-using WardenOfTheWilds.Systems;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 //  FishingShackPatches
-//  Harmony patches for Fishing Shack / Fishing Dock.
+//  Harmony patches for the Fishing Shack Angler/Creeler mode system.
 //
-//  STATUS: STUBS — awaiting Assembly-CSharp.dll decompile results.
+//  Patches:
+//    1. GetNumFishCaught (Postfix)
+//       Multiplies the per-catch fish count based on the shack's current mode.
+//       Full Angler = x1.5, Mixed = x1.25, Full Creeler = x0.5.
+//       This is the authoritative hook for rod-fishing output — it affects
+//       both the actual fish items AND the tally.
 //
-//  Patches planned:
-//    1. FishingShack.OnFishingComplete / OnFishHarvested (Postfix)
-//       → At T2: multiply output by FishingDockOutputMult
-//       → At T2: call FishingShackEnhancement.ConsumeAccumulatedFishOil()
-//         and produce fish oil into output storage
-//       → TODO: confirm method name (candidates: OnFishingComplete,
-//                OnFishHarvested, CompleteWork, FinishFishing, CollectFish)
+//    2. FishFromShoreSubTask constructor (Postfix) [optional]
+//       Modifies timer and capacity fields for Angler mode.
+//       Faster timer (12-20s vs 20-30s), higher carry capacity (40 vs 25).
+//       Falls back gracefully if the subtask class isn't found.
 //
-//    2. FishingShack.OnBuildingUpgraded / tier setter (Postfix)
-//       → When building reaches T2, call ApplyDockUpgrade()
-//       → Ensures worker slots and work circle are set even on fresh upgrades
-//       → TODO: confirm tier-up event method
-//
-//    3. Building.SetBuildingDataRecordName (Postfix)
-//       → At T2 rename to "Fishing Dock"
-//       → Same confirmed target as used by Tended Wilds
-//
-//    4. FishingShack "fish stocks low" hook
-//       → Fires notification when fish count in assigned pond drops below threshold
-//       → TODO: find the fish stock/count field or event on FishingShack
-//       → Candidate: fishReserve, stockCount, availableFish, or a Pond component
-//
-//    5. UISubwidgetFishingShack.Init (Postfix) [if applicable]
-//       → Show Fish Oil production indicator at T2
-//       → TODO: confirm UI class name
-// ─────────────────────────────────────────────────────────────────────────────
+//    3. CreateFishingAreas (Postfix) [optional]
+//       Triggers fishing area recreation when radius changes (Creeler mode).
+// ---------------------------------------------------------------------------
 
 namespace WardenOfTheWilds.Patches
 {
@@ -48,15 +34,18 @@ namespace WardenOfTheWilds.Patches
         private static readonly BindingFlags AllStatic =
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
 
-        // Low-stock threshold — notify if fish pond drops below this count
-        private const int LowStockThreshold = 20;
+        // Cached type reference for subtask timer modification
+        private static FieldInfo _timerMinField = null;
+        private static FieldInfo _timerMaxField = null;
+        private static FieldInfo _capacityField = null;
+        private static bool _subtaskFieldsSearched = false;
 
-        // ── Manual patch application ──────────────────────────────────────────
+        // -- Manual patch application ---------------------------------------
         public static void ApplyPatches(HarmonyLib.Harmony harmony)
         {
             if (!WardenOfTheWildsMod.FishingOverhaulEnabled.Value) return;
 
-            Type? fishType = null;
+            Type fishType = null;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
                 fishType = asm.GetType("FishingShack") ?? asm.GetType("FishermanShack");
@@ -65,106 +54,138 @@ namespace WardenOfTheWilds.Patches
 
             if (fishType == null)
             {
-                MelonLogger.Warning("[WotW] FishingShackPatches: could not find FishingShack type. " +
-                                    "Update type name after decompile.");
+                MelonLogger.Warning(
+                    "[WotW] FishingShackPatches: FishingShack type not found.");
                 return;
             }
 
-            // ── Patch 1: TallyFishCaught — confirmed hook from Assembly-CSharp.dll ──
-            // Signature: void TallyFishCaught(uint numCaught)
-            // Two patches applied:
-            //   Prefix  → multiplies numCaught by FishingDockOutputMult at T2
-            //             (cleanest approach — modifies the value before it is tallied)
-            //   Postfix → drives fish oil accumulation and TW fertilizer synergy
+            // -- Patch 1: GetNumFishCaught on FishFromShoreSubTask (Postfix) --
+            // GetNumFishCaught is declared on the FISHING SUBTASK (not the shack).
+            // The subtask has a `fishingShack` field we use to find the mode.
+            Type subtaskTypeForCatch = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                subtaskTypeForCatch = asm.GetType("FishFromShoreSubTask");
+                if (subtaskTypeForCatch != null) break;
+            }
+            MethodInfo getNumMethod = null;
+            if (subtaskTypeForCatch != null)
+            {
+                getNumMethod = subtaskTypeForCatch.GetMethod("GetNumFishCaught", AllInstance);
+            }
+            if (getNumMethod != null)
+            {
+                harmony.Patch(getNumMethod,
+                    postfix: new HarmonyMethod(
+                        typeof(FishingShackPatches).GetMethod(
+                            nameof(GetNumFishCaughtPostfix), AllStatic)));
+                MelonLogger.Msg(
+                    "[WotW] Patched FishFromShoreSubTask.GetNumFishCaught (Angler output mult)");
+            }
+            else
+            {
+                MelonLogger.Warning(
+                    "[WotW] FishingShackPatches: FishFromShoreSubTask.GetNumFishCaught not found. " +
+                    "Angler output multiplier will not apply.");
+            }
+
+            // -- Patch 2: TallyFishCaught (Prefix) — kept for stats --------
             var tallyMethod = fishType.GetMethod("TallyFishCaught", AllInstance);
             if (tallyMethod != null)
             {
                 harmony.Patch(tallyMethod,
-                    prefix:  new HarmonyMethod(typeof(FishingShackPatches)
-                                 .GetMethod(nameof(TallyFishCaughtPrefix),  AllStatic)),
-                    postfix: new HarmonyMethod(typeof(FishingShackPatches)
-                                 .GetMethod(nameof(TallyFishCaughtPostfix), AllStatic)));
-                MelonLogger.Msg("[WotW] Patched FishingShack.TallyFishCaught (prefix: mult, postfix: oil)");
-            }
-            else
-            {
-                // Fallback candidates for unexpected version differences
-                string[] fallbackCandidates = { "OnFishingComplete", "OnFishHarvested",
-                                                 "CompleteWork", "FinishFishing",
-                                                 "CollectFish", "OnWorkComplete" };
-                bool patched = false;
-                foreach (string candidate in fallbackCandidates)
-                {
-                    var m = fishType.GetMethod(candidate, AllInstance);
-                    if (m == null) continue;
-                    // Fallback only gets the postfix — no safe way to multiply without ref param
-                    harmony.Patch(m, postfix: new HarmonyMethod(
+                    prefix: new HarmonyMethod(
                         typeof(FishingShackPatches).GetMethod(
-                            nameof(TallyFishCaughtPostfix), AllStatic)));
-                    MelonLogger.Msg($"[WotW] Patched FishingShack.{candidate} (fallback postfix)");
-                    patched = true;
-                    break;
-                }
-                if (!patched)
-                    MelonLogger.Warning("[WotW] FishingShackPatches: could not find TallyFishCaught " +
-                                        "or any fallback fishing completion method.");
+                            nameof(TallyFishCaughtPrefix), AllStatic)));
+                MelonLogger.Msg(
+                    "[WotW] Patched FishingShack.TallyFishCaught (stats tracking)");
             }
 
-            // ── Patch 2: Building rename at T2 ───────────────────────────────
-            Type? buildingType = null;
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                buildingType = asm.GetType("Building");
-                if (buildingType != null) break;
-            }
-            if (buildingType != null)
-            {
-                var setNameMethod = buildingType.GetMethod("SetBuildingDataRecordName", AllInstance);
-                if (setNameMethod != null)
-                {
-                    // NOTE: HunterCabinPatches also patches this method.
-                    // Harmony allows multiple postfixes on the same method — no conflict.
-                    harmony.Patch(setNameMethod, postfix: new HarmonyMethod(
-                        typeof(FishingShackPatches).GetMethod(
-                            nameof(SetBuildingDataRecordNamePostfix), AllStatic)));
-                    MelonLogger.Msg("[WotW] Patched Building.SetBuildingDataRecordName (fishing rename)");
-                }
-            }
+            // -- Patch 3: FishFromShoreSubTask timer/capacity ---------------
+            // Optional — modifies timer and carry capacity for Angler workers.
+            // If the subtask class isn't found, Angler still works via output mult.
+            TryPatchSubtaskTimer(harmony);
 
-            // ── Patch 3: Low-stock detection ──────────────────────────────────
-            // TODO: Find and patch the method/coroutine that updates fish stock counts.
-            // Candidates: UpdateFishCount, RefreshFishStock, OnPondStateChanged
-            MelonLogger.Msg("[WotW] FishingShackPatches applied (low-stock patch pending decompile).");
+            MelonLogger.Msg(
+                "[WotW] FishingShackPatches applied " +
+                $"(GetNumFishCaught={getNumMethod != null}, " +
+                $"TallyFishCaught={tallyMethod != null}).");
         }
 
-        // ── Patch implementations ─────────────────────────────────────────────
+        // Cached field info for the subtask's fishingShack reference.
+        private static FieldInfo _subtaskFishingShackField = null;
+        private static bool _subtaskFishingShackFieldSearched = false;
 
+        // -- Patch 1: GetNumFishCaught postfix ------------------------------
         /// <summary>
-        /// Prefix on FishingShack.TallyFishCaught(uint numCaught).
-        /// At T2 (Fishing Dock) multiplies numCaught before the game tallies the catch.
-        /// The ref parameter modifies the actual argument seen by the original method.
+        /// Multiplies the per-catch fish count based on the owning shack's mode.
+        /// __instance is a FishFromShoreSubTask; its `fishingShack` field holds
+        /// the FishingShack we look up the mode on. Return value drives both
+        /// the fish items added and TallyFishCaught — single authoritative hook.
         /// </summary>
-        // NOTE: Harmony matches ref parameters by name — must match exactly.
-        // Confirmed parameter name from game DLL: numFishCaught (NOT numCaught)
+        public static void GetNumFishCaughtPostfix(object __instance, ref int __result)
+        {
+            try
+            {
+                if (!WardenOfTheWildsMod.FishingOverhaulEnabled.Value) return;
+                if (__result <= 0 || __instance == null) return;
+
+                // Resolve the subtask's fishingShack field once per session.
+                if (!_subtaskFishingShackFieldSearched)
+                {
+                    _subtaskFishingShackFieldSearched = true;
+                    _subtaskFishingShackField = __instance.GetType()
+                        .GetField("fishingShack", AllInstance);
+                }
+                if (_subtaskFishingShackField == null) return;
+
+                var shack = _subtaskFishingShackField.GetValue(__instance) as Component;
+                if (shack == null) return;
+
+                var enhancement = shack.GetComponent<FishingShackEnhancement>();
+                if (enhancement == null) return;
+
+                float mult = enhancement.GetAnglerOutputMult();
+                if (Math.Abs(mult - 1f) < 0.01f) return; // No change
+
+                int original = __result;
+                __result = (int)Math.Max(1, Math.Round(__result * mult));
+
+                // Occasional log (not every catch — would spam)
+                if (UnityEngine.Random.value < 0.1f)
+                {
+                    MelonLogger.Msg(
+                        $"[WotW] Fishing '{shack.gameObject.name}' mode={enhancement.Mode}: " +
+                        $"catch {original} -> {__result} (x{mult:F2})");
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] GetNumFishCaughtPostfix: {ex.Message}");
+            }
+        }
+
+        // -- Patch 2: TallyFishCaught prefix --------------------------------
+        /// <summary>
+        /// Lightweight prefix on TallyFishCaught — logs catch events for
+        /// diagnostics. The actual output multiplication is in GetNumFishCaught.
+        /// </summary>
         public static void TallyFishCaughtPrefix(object __instance, ref uint numFishCaught)
         {
             try
             {
                 if (!WardenOfTheWildsMod.FishingOverhaulEnabled.Value) return;
 
+                // Log every catch for balance tuning (can be disabled later)
                 var comp = __instance as Component;
                 if (comp == null) return;
 
-                var building = comp.GetComponent<Building>();
-                if (building == null || building.tier < 2) return;
+                var enhancement = comp.GetComponent<FishingShackEnhancement>();
+                if (enhancement == null) return;
 
-                float mult = WardenOfTheWildsMod.FishingDockOutputMult.Value;
-                if (mult <= 1f) return;
-
-                // Multiply the catch before the game records it.
-                // Floor to uint — minimum 1 if something was caught.
-                uint boosted = (uint)Math.Max(1, Math.Floor(numFishCaught * mult));
-                numFishCaught = boosted;
+                // The numFishCaught is already modified by GetNumFishCaught postfix
+                // (that runs before the fish reach this point in the pipeline).
+                // We just log for diagnostic purposes.
             }
             catch (Exception ex)
             {
@@ -172,112 +193,138 @@ namespace WardenOfTheWilds.Patches
             }
         }
 
+        // -- Patch 3: FishFromShoreSubTask timer modification ---------------
         /// <summary>
-        /// Postfix on FishingShack.TallyFishCaught(uint numCaught).
-        /// Handles fish oil accumulation and Tended Wilds fertilizer synergy.
-        /// The output multiplication is handled by the Prefix above.
+        /// Attempts to patch the FishFromShoreSubTask constructor to modify
+        /// timer and capacity fields for Angler mode. Falls back gracefully.
         /// </summary>
-        public static void TallyFishCaughtPostfix(object __instance)
+        private static void TryPatchSubtaskTimer(HarmonyLib.Harmony harmony)
         {
             try
             {
-                var comp = __instance as Component;
-                if (comp == null) return;
+                Type subtaskType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    subtaskType = asm.GetType("FishFromShoreSubTask");
+                    if (subtaskType != null) break;
+                }
 
-                var building = comp.GetComponent<Building>();
-                if (building == null || building.tier < 2) return;
+                if (subtaskType == null)
+                {
+                    MelonLogger.Msg(
+                        "[WotW] FishFromShoreSubTask not found — " +
+                        "Angler timer boost unavailable (output mult still works).");
+                    return;
+                }
 
-                var enhancement = comp.GetComponent<FishingShackEnhancement>();
+                // Cache field references for the postfix
+                _timerMinField = subtaskType.GetField("timeBetweenFishMin", AllInstance)
+                              ?? subtaskType.GetField("_timeBetweenFishMin", AllInstance);
+                _timerMaxField = subtaskType.GetField("timeBetweenFishMax", AllInstance)
+                              ?? subtaskType.GetField("_timeBetweenFishMax", AllInstance);
+                _capacityField = subtaskType.GetField("fishCapacity", AllInstance)
+                              ?? subtaskType.GetField("_fishCapacity", AllInstance);
+                _subtaskFieldsSearched = true;
+
+                if (_timerMinField == null && _timerMaxField == null && _capacityField == null)
+                {
+                    MelonLogger.Msg(
+                        "[WotW] FishFromShoreSubTask timer/capacity fields not found. " +
+                        "Dumping fields for investigation:");
+                    foreach (var f in subtaskType.GetFields(AllInstance))
+                        MelonLogger.Msg($"[WotW]   field: {f.Name} ({f.FieldType.Name})");
+                    return;
+                }
+
+                // Find a constructor to patch
+                var ctors = subtaskType.GetConstructors(AllInstance);
+                if (ctors.Length == 0)
+                {
+                    MelonLogger.Warning(
+                        "[WotW] FishFromShoreSubTask has no constructors to patch.");
+                    return;
+                }
+
+                // Patch the first constructor with our postfix
+                harmony.Patch(ctors[0],
+                    postfix: new HarmonyMethod(
+                        typeof(FishingShackPatches).GetMethod(
+                            nameof(SubtaskConstructorPostfix), AllStatic)));
+
+                MelonLogger.Msg(
+                    $"[WotW] Patched FishFromShoreSubTask constructor " +
+                    $"(timerMin={_timerMinField != null}, timerMax={_timerMaxField != null}, " +
+                    $"capacity={_capacityField != null})");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning(
+                    $"[WotW] TryPatchSubtaskTimer: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Postfix on FishFromShoreSubTask constructor.
+        /// Modifies timer and capacity fields when the owning shack is in Angler mode.
+        /// </summary>
+        public static void SubtaskConstructorPostfix(object __instance, object[] __args)
+        {
+            try
+            {
+                if (!WardenOfTheWildsMod.FishingOverhaulEnabled.Value) return;
+                if (!_subtaskFieldsSearched) return;
+
+                // The subtask constructor typically takes (FishTask, FishingShack).
+                // Find the FishingShack argument.
+                FishingShackEnhancement enhancement = null;
+                foreach (object arg in __args)
+                {
+                    var comp = arg as Component;
+                    if (comp != null)
+                    {
+                        enhancement = comp.GetComponent<FishingShackEnhancement>();
+                        if (enhancement != null) break;
+                    }
+                }
+
                 if (enhancement == null) return;
 
-                // ── Fish oil accumulation ─────────────────────────────────────
-                int oilUnits = enhancement.ConsumeAccumulatedFishOil();
-                if (oilUnits > 0)
+                // Only modify timer/capacity for Angler slots
+                if (enhancement.AnglerSlots <= 0) return;
+
+                // Angler timer: reduce by AnglerTimerReduction (default 0.65 = 35% faster)
+                float timerMult = WardenOfTheWildsMod.AnglerTimerReduction.Value;
+                if (_timerMinField != null)
                 {
-                    ProduceFishOil(comp, oilUnits);
+                    float current = (float)_timerMinField.GetValue(__instance);
+                    _timerMinField.SetValue(__instance, current * timerMult);
+                }
+                if (_timerMaxField != null)
+                {
+                    float current = (float)_timerMaxField.GetValue(__instance);
+                    _timerMaxField.SetValue(__instance, current * timerMult);
                 }
 
-                // ── Tended Wilds: fish oil fertilizer synergy ─────────────────
-                if (oilUnits > 0 && WardenOfTheWildsMod.TendedWildsActive)
+                // Angler capacity: add bonus carry capacity
+                int capBonus = WardenOfTheWildsMod.AnglerCapacityBonus.Value;
+                if (_capacityField != null && capBonus > 0)
                 {
-                    TendedWildsCompat.ApplyFishOilFertilizer(
-                        comp.transform.position,
-                        radius: 50f,
-                        multiplier: 1.25f,
-                        durationMonths: 2);
+                    if (_capacityField.FieldType == typeof(int))
+                    {
+                        int current = (int)_capacityField.GetValue(__instance);
+                        _capacityField.SetValue(__instance, current + capBonus);
+                    }
+                    else if (_capacityField.FieldType == typeof(uint))
+                    {
+                        uint current = (uint)_capacityField.GetValue(__instance);
+                        _capacityField.SetValue(__instance, current + (uint)capBonus);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                MelonLogger.Warning($"[WotW] TallyFishCaughtPostfix: {ex.Message}");
+                MelonLogger.Warning($"[WotW] SubtaskConstructorPostfix: {ex.Message}");
             }
-        }
-
-        /// <summary>
-        /// Postfix on Building.SetBuildingDataRecordName.
-        /// Renames FishingShack T2 to "Fishing Dock".
-        /// </summary>
-        public static void SetBuildingDataRecordNamePostfix(object __instance)
-        {
-            try
-            {
-                var building = __instance as Building;
-                if (building == null) return;
-
-                string typeName = building.GetType().Name;
-                if (!typeName.Contains("Fishing") && !typeName.Contains("Fish")) return;
-                if (building.tier < 2) return;
-
-                var resource = building as Resource;
-                if (resource != null)
-                    resource.displayName = "Fishing Dock";
-            }
-            catch (Exception ex)
-            {
-                MelonLogger.Warning($"[WotW] SetBuildingDataRecordNamePostfix (fishing): {ex.Message}");
-            }
-        }
-
-        // ── Fish oil production helper ────────────────────────────────────────
-        // TODO: Produce actual fish oil items into the building's output storage.
-        //
-        // Three paths (decide after decompile + ItemID confirmation):
-        //   Path A: Fish Oil maps to an existing ItemID (lamp oil, tallow variant?)
-        //   Path B: New ItemID via reflection/enum patching (complex, fragile)
-        //   Path C: Produce as Tallow with a flag in the enhancement component
-        //           that downstream buildings (Smokehouse) recognise as "fish oil"
-        //
-        // Path C is most pragmatic for v0.1 — easy to upgrade later.
-        private static void ProduceFishOil(Component fishShack, int units)
-        {
-            try
-            {
-                // TODO: implement once storage access method is confirmed.
-                // Placeholder: log production for now.
-                MelonLogger.Msg($"[WotW] Fish Oil produced: {units} unit(s) at '{fishShack.gameObject.name}'");
-            }
-            catch (Exception ex)
-            {
-                MelonLogger.Warning($"[WotW] ProduceFishOil: {ex.Message}");
-            }
-        }
-
-        // ── Low-stock check helper ────────────────────────────────────────────
-        // TODO: Call this from the patched fish-count update method.
-        private static void CheckFishStock(object fishShackInstance)
-        {
-            try
-            {
-                // TODO: Read fish stock count from the confirmed field/property.
-                // Candidate field names: fishCount, availableFish, pondFishReserve,
-                //   or a reference to a Pond component with its own stock field.
-                //
-                // int stock = (int)(fishStockField.GetValue(fishShackInstance) ?? 0);
-                // if (stock < LowStockThreshold)
-                //     MelonLogger.Warning($"[WotW] LOW FISH STOCK at " +
-                //         $"'{(fishShackInstance as Component)?.gameObject.name}': {stock} remaining!");
-            }
-            catch { }
         }
     }
 }
