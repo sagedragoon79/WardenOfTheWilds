@@ -811,10 +811,11 @@ namespace WardenOfTheWilds
             HunterCombatPatches.OnMapLoaded();
 
             // Unlock fox + groundhog spawns (override vanilla 1500-day delays)
-            SmallGameUnlockSystem.OnMapLoaded();
-
-            // Scale bear/wolf/boar/deer population caps via config multipliers
-            AnimalSpawnTuningSystem.OnMapLoaded();
+            // and scale bear/wolf/boar/deer caps. animalManager is often null
+            // at scene-loaded time (singleton chain not yet wired up), so defer
+            // until it's available. Without this delay, both systems silently
+            // bail on every load with "animalManager not available".
+            MelonCoroutines.Start(WaitForAnimalManagerThenInit());
 
             MelonCoroutines.Start(LateInit());
 
@@ -843,6 +844,37 @@ namespace WardenOfTheWilds
         /// deserialise before we attach components and apply patches.
         /// Mirrors the pattern used in Tended Wilds and Manifest Delivery.
         /// </summary>
+        /// <summary>
+        /// Polls until GameManager.animalManager is available, then runs the
+        /// fox/groundhog unlock + bear/wolf/boar/deer spawn-tuning systems.
+        /// Both depend on animalManager fields and would silently bail if
+        /// fired at scene-loaded time when the singleton chain isn't ready.
+        /// </summary>
+        private IEnumerator WaitForAnimalManagerThenInit()
+        {
+            const int  MaxAttempts  = 30;     // 30 × 1s = 30s window
+            const float PollSeconds = 1f;
+
+            for (int i = 0; i < MaxAttempts; i++)
+            {
+                var gm = UnitySingleton<GameManager>.Instance;
+                if (gm != null && gm.animalManager != null)
+                {
+                    Log.Msg(
+                        $"[WotW] animalManager ready after {i + 1} poll(s) — " +
+                        "running SmallGameUnlock + AnimalSpawnTuning.");
+                    SmallGameUnlockSystem.OnMapLoaded();
+                    AnimalSpawnTuningSystem.OnMapLoaded();
+                    yield break;
+                }
+                yield return new WaitForSeconds(PollSeconds);
+            }
+
+            Log.Warning(
+                "[WotW] animalManager never became available after " +
+                $"{MaxAttempts}s — small-game unlock + spawn tuning skipped.");
+        }
+
         private IEnumerator LateInit()
         {
             yield return new WaitForSeconds(10f);
