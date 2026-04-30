@@ -42,6 +42,23 @@ namespace WardenOfTheWilds
         // TOP-LEVEL — disable an entire area of the mod.
         public static MelonPreferences_Entry<bool> HunterOverhaulEnabled   { get; private set; } = null!;
         public static MelonPreferences_Entry<bool> FishingOverhaulEnabled  { get; private set; } = null!;
+        public static MelonPreferences_Entry<bool> SmokehouseOverhaulEnabled { get; private set; } = null!;
+
+        // Master diagnostics toggle. When OFF (default), the verbose
+        // type/method/SO discovery dumps stay quiet — those were used during
+        // mod development to map game internals. When ON, the SmokeDiag dump
+        // and the per-smokehouse WorkOrderDiagnosticLoop both fire so the
+        // log captures everything needed to investigate a game patch.
+        public static MelonPreferences_Entry<bool> DiagnosticsEnabled { get; private set; } = null!;
+
+        // Smokehouse tuning (Stalk & Smoke heritage feature, restored).
+        // All gated by SmokehouseOverhaulEnabled.
+        public static MelonPreferences_Entry<bool>  SmokehouseRadiusEnabled        { get; private set; } = null!;
+        public static MelonPreferences_Entry<bool>  SmokehouseRadiusEnforce        { get; private set; } = null!;
+        public static MelonPreferences_Entry<float> SmokehouseWorkRadius           { get; private set; } = null!;
+        public static MelonPreferences_Entry<int>   SmokehouseMaxWorkers           { get; private set; } = null!;
+        public static MelonPreferences_Entry<int>   SmokehouseRawMeatStorageCap    { get; private set; } = null!;
+        public static MelonPreferences_Entry<int>   SmokehouseSmokedMeatStorageCap { get; private set; } = null!;
 
         // SUB-SYSTEM — finer-grained toggles for diagnosis. Each can be turned
         // off independently to isolate a performance issue. Top-level toggles
@@ -126,6 +143,19 @@ namespace WardenOfTheWilds
         public static MelonPreferences_Entry<int>   FoxSpawnDelayDays         { get; private set; } = null!;
         /// <summary>Days to wait before groundhogs begin spawning after map start.</summary>
         public static MelonPreferences_Entry<int>   GroundhogSpawnDelayDays   { get; private set; } = null!;
+        /// <summary>In-game days between fox spawn-check ticks. Vanilla = 220 (one
+        /// fox every ~8 months). Counter resets every save load, so the vanilla
+        /// rate is effectively unreachable for active save-load play. Default 60d.</summary>
+        public static MelonPreferences_Entry<int>   FoxSpawnIntervalDays      { get; private set; } = null!;
+        /// <summary>In-game days between groundhog spawn-check ticks. Vanilla = 240.
+        /// Default 60d.</summary>
+        public static MelonPreferences_Entry<int>   GroundhogSpawnIntervalDays { get; private set; } = null!;
+        /// <summary>Minimum world-unit distance a fox must spawn from the nearest
+        /// building. Vanilla = 500 (almost always fails to find a valid position
+        /// on small/medium maps — confirmed via spawn trace). Default 100.</summary>
+        public static MelonPreferences_Entry<int>   FoxMinSpawnDistance       { get; private set; } = null!;
+        /// <summary>Same for groundhogs. Vanilla = 500. Default 100.</summary>
+        public static MelonPreferences_Entry<int>   GroundhogMinSpawnDistance { get; private set; } = null!;
 
         // ── Big game spawn tuning ────────────────────────────────────────────
         /// <summary>Multiplier on bear population cap per map. 1.0 = vanilla,
@@ -347,6 +377,67 @@ namespace WardenOfTheWilds
                 description: "Enables Fishing Shack Tier 2 (Fishing Dock) with improved " +
                              "output, 2-worker support, and Fish Oil byproduct.");
 
+            DiagnosticsEnabled = cat.CreateEntry("DiagnosticsEnabled", false,
+                display_name: "Diagnostics Enabled (verbose log dumps)",
+                description: "When ON, dumps detailed game-internal information to the " +
+                             "MelonLoader log on every map load: SmokeHouse class fields/" +
+                             "methods, WorkBucketIdentifier enum values, ManufactureDefinition " +
+                             "shapes, smokehouse work-order traces, etc. Used during mod " +
+                             "development to map game internals; useful again when a Crate " +
+                             "patch breaks something. Default OFF — keeps the log clean.");
+
+            // ── Smokehouse (Stalk & Smoke heritage, restored) ────────────────
+            SmokehouseOverhaulEnabled = cat.CreateEntry("SmokehouseOverhaulEnabled", true,
+                display_name: "Smokehouse Overhaul Enabled",
+                description: "Master toggle for the Smokehouse enhancement: work-radius " +
+                             "circle, configurable worker slots, and increased storage " +
+                             "capacity for raw meat / smoked meat. " +
+                             "When OFF, Smokehouses use vanilla behaviour entirely.");
+
+            SmokehouseRadiusEnabled = cat.CreateEntry("SmokehouseRadiusEnabled", true,
+                display_name: "Smokehouse Work Radius Enabled",
+                description: "When ON, the Smokehouse displays a visible WorkArea circle " +
+                             "(visible when the building is selected) at the configured " +
+                             "radius. Set OFF to disable the visual entirely while keeping " +
+                             "the storage / worker buffs.");
+
+            SmokehouseRadiusEnforce = cat.CreateEntry("SmokehouseRadiusEnforce", true,
+                display_name: "Smokehouse Radius Enforcement",
+                description: "When ON (and SmokehouseRadiusEnabled is also ON), Smokehouse " +
+                             "workers will REFUSE to collect raw meat / fish from sources " +
+                             "outside the configured radius. Implemented by pruning the " +
+                             "SmokeHouse.storagesToStealFrom list on a 5-second loop. Set " +
+                             "OFF for visual-only radius (advisory only — workers walk " +
+                             "anywhere vanilla logic sends them).");
+
+            SmokehouseWorkRadius = cat.CreateEntry("SmokehouseWorkRadius", 60f,
+                display_name: "Smokehouse Work Radius (world units)",
+                description: "Radius of the Smokehouse work area circle. Vanilla has no " +
+                             "WorkArea on the Smokehouse — the visual is purely advisory " +
+                             "for placing Hunter Cabins / Fishing Shacks within range. " +
+                             "60u ≈ a comfortable supply zone. Lower for tighter clusters, " +
+                             "higher for sprawling layouts.");
+
+            SmokehouseMaxWorkers = cat.CreateEntry("SmokehouseMaxWorkers", 2,
+                display_name: "Smokehouse Max Workers",
+                description: "Number of worker slots on each Smokehouse. Vanilla = 1. " +
+                             "2 = a second smoker can process meat / fish in parallel, " +
+                             "doubling throughput. Set to 1 to keep vanilla parity.");
+
+            SmokehouseRawMeatStorageCap = cat.CreateEntry("SmokehouseRawMeatStorageCap", 200,
+                display_name: "Smokehouse Raw Meat Storage Cap",
+                description: "Capacity for INCOMING raw meat / fish (the buffer waiting " +
+                             "to be smoked). Vanilla cap is small and stalls production " +
+                             "when hunters bring in a big haul. 200 units gives a comfortable " +
+                             "buffer. Field is auto-discovered at attach time — see log.");
+
+            SmokehouseSmokedMeatStorageCap = cat.CreateEntry("SmokehouseSmokedMeatStorageCap", 200,
+                display_name: "Smokehouse Smoked Meat Storage Cap",
+                description: "Capacity for OUTGOING smoked meat / smoked fish (waiting for " +
+                             "wagon pickup). Larger output buffer = fewer wagon trips and " +
+                             "no production stalls when storehouses are full. 200 units = " +
+                             "comfortable wagon-load buffer.");
+
             // Sub-system diagnostics — disable individual parts of the mod
             // to isolate a performance issue. These only matter when their
             // parent top-level toggle is ON.
@@ -465,16 +556,21 @@ namespace WardenOfTheWilds
                              "are deposited directly into the cabin. Passive bear income — " +
                              "no combat required. 0.03 = 3% per catch.");
 
-            UnlockFoxSpawns = cat.CreateEntry("UnlockFoxSpawns", true,
-                display_name: "Unlock Fox Spawns",
-                description: "Enables foxes in the world. Crate implemented foxes fully (wander, " +
-                             "food pursuit, retreat behaviors) but gated them behind a 1500-day " +
-                             "spawn delay that effectively disables them. When true, this mod " +
-                             "overrides the delay so foxes appear on schedule.");
+            UnlockFoxSpawns = cat.CreateEntry("UnlockFoxSpawns", false,
+                display_name: "Unlock Fox Spawns (DORMANT — Cat & Dog DLC incoming)",
+                description: "Crate has announced a Cat & Dog DLC where Foxes (chicken " +
+                             "predators) and Groundhogs (crop pests) become first-class " +
+                             "antagonists. Crate will ship their own balancing for these " +
+                             "creatures. Until that DLC drops and we can evaluate the new " +
+                             "tuning, all Fox/Groundhog overrides in this mod are dormant " +
+                             "(short-circuited at runtime regardless of this pref's value). " +
+                             "Default OFF. Will revisit on DLC release.");
 
-            UnlockGroundhogSpawns = cat.CreateEntry("UnlockGroundhogSpawns", true,
-                display_name: "Unlock Groundhog Spawns",
-                description: "Enables groundhogs in the world, same unlock mechanism as foxes.");
+            UnlockGroundhogSpawns = cat.CreateEntry("UnlockGroundhogSpawns", false,
+                display_name: "Unlock Groundhog Spawns (DORMANT — Cat & Dog DLC incoming)",
+                description: "Same status as Unlock Fox Spawns — overrides dormant pending " +
+                             "Cat & Dog DLC release. Crate's tuning takes priority once " +
+                             "the DLC ships.");
 
             FoxSpawnDelayDays = cat.CreateEntry("FoxSpawnDelayDays", 90,
                 display_name: "Fox Spawn Delay (days)",
@@ -491,6 +587,33 @@ namespace WardenOfTheWilds
                              "spawning (vanilla gates groundhogs on field presence). 90 = ~3 " +
                              "months of farming before crops come under pressure. More fields " +
                              "attract more groundhog groups.");
+
+            FoxSpawnIntervalDays = cat.CreateEntry("FoxSpawnIntervalDays", 60,
+                display_name: "Fox Spawn Interval (days)",
+                description: "In-game days between each fox spawn-check tick. Vanilla = 220, " +
+                             "but the per-group counter resets to 0 on every save load — so the " +
+                             "vanilla rate is effectively unreachable for active save-load play. " +
+                             "60 = roughly one fox attempt every 2 months in-game. Lower = more " +
+                             "frequent fox encounters; higher = rarer.");
+
+            GroundhogSpawnIntervalDays = cat.CreateEntry("GroundhogSpawnIntervalDays", 60,
+                display_name: "Groundhog Spawn Interval (days)",
+                description: "In-game days between each groundhog spawn-check tick. Vanilla = 240. " +
+                             "60 = roughly one groundhog attempt every 2 months. Lower = more, " +
+                             "higher = rarer.");
+
+            FoxMinSpawnDistance = cat.CreateEntry("FoxMinSpawnDistance", 100,
+                display_name: "Fox Min Spawn Distance (world units)",
+                description: "Minimum world-unit distance a newly-spawned fox must be from the " +
+                             "nearest building. Vanilla = 500u, which on typical FF maps is " +
+                             "larger than the available pathable space — the spawn function " +
+                             "exhausts every edge point and returns 0 actual spawns. " +
+                             "100u keeps foxes from popping next to coops without making " +
+                             "spawning impossible.");
+
+            GroundhogMinSpawnDistance = cat.CreateEntry("GroundhogMinSpawnDistance", 100,
+                display_name: "Groundhog Min Spawn Distance (world units)",
+                description: "Same gate for groundhogs. Vanilla = 500u; default 100u.");
 
             BearSpawnMultiplier = cat.CreateEntry("BearSpawnMultiplier", 1.5f,
                 display_name: "Bear Spawn Multiplier",
@@ -810,6 +933,13 @@ namespace WardenOfTheWilds
             HuntingBlindSystem.OnMapLoaded();
             HunterCombatPatches.OnMapLoaded();
 
+            // One-shot smokehouse type/method/enum dump. Used during mod
+            // development to map game internals; useful again when a Crate
+            // patch breaks something. Gated by the global Diagnostics toggle
+            // (default OFF) so the log stays clean for normal players.
+            if (SmokehouseOverhaulEnabled.Value && DiagnosticsEnabled.Value)
+                Systems.SmokehouseDiagnostics.OnMapLoaded();
+
             // Unlock fox + groundhog spawns (override vanilla 1500-day delays)
             // and scale bear/wolf/boar/deer caps. animalManager is often null
             // at scene-loaded time (singleton chain not yet wired up), so defer
@@ -1050,41 +1180,118 @@ namespace WardenOfTheWilds
 
         private bool TryAttachComponents()
         {
+            // DEFENSIVE: previous implementation iterated every loaded
+            // assembly without try/catch. A single ill-behaved assembly
+            // (e.g. dynamic / Reflection.Emit one) throwing on `asm.GetType`
+            // killed the entire loop silently — neither the success log
+            // nor the failure log ever fired, leaving us with the
+            // "every enhancement silently never attaches" symptom.
+            //
+            // We now isolate three risks:
+            //   1. Per-assembly type lookup (try/catch around each asm)
+            //   2. Per-section AddComponent (try/catch around each block)
+            //   3. The whole function itself (one outer try/catch)
+            // and log anything unexpected so silent failures become visible.
             bool foundAny = false;
+            int hunterAdded = 0, fishAdded = 0, smokeAdded = 0;
 
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            try
             {
-                // Hunter Cabin — HunterBuilding confirmed from Assembly-CSharp.dll decompile
-                var hunterType = asm.GetType("HunterBuilding") ?? asm.GetType("HunterCabin");
-                if (hunterType != null && HunterOverhaulEnabled.Value)
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
                 {
-                    foreach (UnityEngine.Object obj in UnityEngine.Object.FindObjectsOfType(hunterType))
+                    Type? hunterType = null, fishType = null, smokeType = null;
+                    try
                     {
-                        var go = (obj as Component)?.gameObject;
-                        if (go != null && go.GetComponent<HunterCabinEnhancement>() == null)
+                        hunterType = asm.GetType("HunterBuilding") ?? asm.GetType("HunterCabin");
+                        fishType   = asm.GetType("FishingShack")   ?? asm.GetType("FishermanShack");
+                        smokeType  = asm.GetType("SmokeHouse")     ?? asm.GetType("Smokehouse");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(
+                            $"[WotW] TryAttachComponents: GetType threw on '{asm.GetName().Name}': {ex.Message}");
+                        continue;
+                    }
+
+                    if (hunterType != null && HunterOverhaulEnabled.Value)
+                    {
+                        try
                         {
-                            go.AddComponent<HunterCabinEnhancement>();
-                            foundAny = true;
+                            foreach (UnityEngine.Object obj in UnityEngine.Object.FindObjectsOfType(hunterType))
+                            {
+                                var go = (obj as Component)?.gameObject;
+                                if (go != null && go.GetComponent<HunterCabinEnhancement>() == null)
+                                {
+                                    go.AddComponent<HunterCabinEnhancement>();
+                                    foundAny = true;
+                                    hunterAdded++;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(
+                                $"[WotW] TryAttachComponents: HunterBuilding attach threw: {ex.Message}");
                         }
                     }
-                }
 
-                // Fishing Shack
-                var fishType = asm.GetType("FishingShack") ?? asm.GetType("FishermanShack");
-                if (fishType != null && FishingOverhaulEnabled.Value)
-                {
-                    foreach (UnityEngine.Object obj in UnityEngine.Object.FindObjectsOfType(fishType))
+                    if (fishType != null && FishingOverhaulEnabled.Value)
                     {
-                        var go = (obj as Component)?.gameObject;
-                        if (go != null && go.GetComponent<FishingShackEnhancement>() == null)
+                        try
                         {
-                            go.AddComponent<FishingShackEnhancement>();
-                            foundAny = true;
+                            foreach (UnityEngine.Object obj in UnityEngine.Object.FindObjectsOfType(fishType))
+                            {
+                                var go = (obj as Component)?.gameObject;
+                                if (go != null && go.GetComponent<FishingShackEnhancement>() == null)
+                                {
+                                    go.AddComponent<FishingShackEnhancement>();
+                                    foundAny = true;
+                                    fishAdded++;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(
+                                $"[WotW] TryAttachComponents: FishingShack attach threw: {ex.Message}");
+                        }
+                    }
+
+                    if (smokeType != null && SmokehouseOverhaulEnabled.Value)
+                    {
+                        try
+                        {
+                            foreach (UnityEngine.Object obj in UnityEngine.Object.FindObjectsOfType(smokeType))
+                            {
+                                var go = (obj as Component)?.gameObject;
+                                if (go != null && go.GetComponent<SmokehouseEnhancement>() == null)
+                                {
+                                    go.AddComponent<SmokehouseEnhancement>();
+                                    foundAny = true;
+                                    smokeAdded++;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(
+                                $"[WotW] TryAttachComponents: SmokeHouse attach threw: {ex.Message}");
                         }
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                Log.Error($"[WotW] TryAttachComponents OUTER: {ex}");
+                return false;
+            }
 
+            if (foundAny)
+            {
+                Log.Msg(
+                    $"[WotW] TryAttachComponents: hunter={hunterAdded}, " +
+                    $"fish={fishAdded}, smoke={smokeAdded}");
+            }
             return foundAny;
         }
     }

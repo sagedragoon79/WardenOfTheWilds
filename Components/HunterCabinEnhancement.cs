@@ -26,8 +26,11 @@ using System.Reflection;
 //                  • Traps DISABLED (hunter free-roams only)
 //                  • 2 worker slots
 //                  • Work radius multiplied (see Plugin preferences)
-//                  • Unlocks Deer Stand placement
-//                  • Access to bear/boar hunting (if game supports it)
+//                  • Access to bear/boar hunting
+//
+//  (Deer Stand placement was an early design idea but was dropped — the
+//   announced Cat & Dog DLC introduces dogs as a deer deterrent, which
+//   covers that niche better than a static deer-attractor structure.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace WardenOfTheWilds.Components
@@ -36,7 +39,7 @@ namespace WardenOfTheWilds.Components
     {
         Vanilla,       // T1 or T2 not yet specialised
         TrapperLodge,  // Pelt/trap focus
-        HuntingLodge,  // Meat/range focus — unlocks Deer Stands
+        HuntingLodge,  // Meat/range focus
     }
 
     public class HunterCabinEnhancement : MonoBehaviour
@@ -866,6 +869,29 @@ namespace WardenOfTheWilds.Components
                 ? WardenOfTheWildsMod.HuntingLodgeSpeedMult.Value
                 : 1.0f;
             SetWorkerSpeed(mult);
+        }
+
+        /// <summary>
+        /// Re-applies the speed bonus to a single villager. Called from the
+        /// Harmony postfix on VillagerOccupationHunter.Init so that whenever
+        /// vanilla resets the bonus to its baseline (0.2), we immediately put
+        /// the BGH multiplier back. Without this hook, anything that triggers
+        /// occupation re-init clobbers the BGH bonus mid-game.
+        /// </summary>
+        public void ApplySpeedBonusToVillager(Villager v)
+        {
+            if (v == null) return;
+            if (!(v.residence is HunterBuilding hb)) return;
+            if (hb != GetComponent<HunterBuilding>()) return;
+
+            var gm = UnitySingleton<GameManager>.Instance;
+            var cm = gm?.combatManager;
+            if (cm == null) return;
+            float baseline = cm.hunterMoveSpeedBonus;
+            float mult = _path == HunterT2Path.HuntingLodge
+                ? WardenOfTheWildsMod.HuntingLodgeSpeedMult.Value
+                : 1.0f;
+            v.curOccupationalSpeedBonus = baseline * mult;
         }
 
         // ── Kiting parameter log ──────────────────────────────────────────────

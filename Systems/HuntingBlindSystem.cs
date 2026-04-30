@@ -15,18 +15,19 @@ using System.Reflection;
 //      • Small gold upkeep per assigned hunter — same as guard tower
 //      • Provides an elevated fixed firing position
 //      • Grants a shoot range bonus (height advantage, like tower archers)
-//      • Unlocked by Hunting Lodge T2 (same gate as Deer Stand)
+//      • Unlocked by Hunting Lodge T2
 //
-//  DIFFERENCE FROM DEER STAND:
-//    Deer Stand  — passive, no worker, attracts game toward it
-//    Hunting Blind — active, 1 assigned worker, hunter shoots FROM it
-//                    Gold upkeep. Used for both raids and wilderness hunting.
+//  Hunting Blind — active, 1 assigned worker, hunter shoots FROM it.
+//                  Gold upkeep. Used for both raids and wilderness hunting.
+//
+//  (An earlier design considered a passive "Deer Stand" companion building.
+//   That was dropped — the announced Cat & Dog DLC introduces dogs as a deer
+//   deterrent, which covers that gameplay niche.)
 //
 //  DUAL USE:
 //    1. WILDERNESS HUNTING:
-//       Place near game trails / Deer Stand clusters. The hunter in the blind
-//       shoots from elevation while the Deer Stands funnel game past it.
-//       Range bonus + elevation = hits before the animal reaches melee range.
+//       Place near game trails. The hunter in the blind shoots from elevation,
+//       getting hits in before the animal reaches melee range.
 //       No kiting needed — the blind IS the safe position.
 //
 //    2. RAID DEFENSE:

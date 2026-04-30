@@ -69,8 +69,6 @@ namespace WardenOfTheWilds.Components
         {
             SavedModes.Clear();
             _winterBonusApplied = false;
-            _cachedDayFieldInfo = null;
-            _dayFieldSearchDone = false;
             _cachedTrapPrefab = null;
             _trapPrefabLookupDone = false;
         }
@@ -259,8 +257,11 @@ namespace WardenOfTheWilds.Components
                 _mode = FishingShackMode.Angler;
             }
 
-            // Always 2 workers for enhanced shacks (baseline)
-            SetWorkerSlots(2);
+            // Worker slots: Angler = 2 (rod-fishing scales linearly with workers),
+            // Creeler = 1 (traps auto-harvest via ProduceCreelerFish daily tick;
+            // the rod-fishing throttle drops Creeler rod catch to ~1/cast, so
+            // a second worker is wasted slot — let the laborer pool use it).
+            SetWorkerSlots(_mode == FishingShackMode.Creeler ? 1 : 2);
 
             // Fishing storage capacity — wagon-efficient pickup (baseline)
             SetFishStorageCapacity(WardenOfTheWildsMod.FishingShackStorageCap.Value);
@@ -1142,10 +1143,12 @@ namespace WardenOfTheWilds.Components
         }
 
         // -- Game day detection ---------------------------------------------
-        private static FieldInfo _cachedDayFieldInfo = null;
-        private static PropertyInfo _cachedDayPropInfo = null;
-        private static object _cachedTimeManager = null;
-        private static bool _dayFieldSearchDone = false;
+        // Direct property access — TimeManager.currentDate is a CEDateTime struct
+        // with public year/month/day properties. The previous reflection lookup
+        // searched for fields like "currentDay", "totalDaysPassed", etc. — none
+        // of which exist. That lookup always failed, GetCurrentGameDay always
+        // returned -1, and ProduceCrabTrapFish never fired (Creeler trap fish
+        // never deposited into shack storage). Fixed by using the actual API.
 
         private static int GetCurrentGameDay()
         {
@@ -1153,73 +1156,19 @@ namespace WardenOfTheWilds.Components
             {
                 var gm = UnitySingleton<GameManager>.Instance;
                 if (gm == null) return -1;
+                var tm = gm.timeManager;
+                if (tm == null) return -1;
 
-                // Cache the time manager and day accessor on first successful call
-                if (!_dayFieldSearchDone)
-                {
-                    _dayFieldSearchDone = true;
-
-                    // Find timeManager on GameManager
-                    object tm = FindFieldOrProperty(gm, "timeManager");
-                    if (tm == null) tm = FindFieldOrProperty(gm, "_timeManager");
-                    if (tm == null)
-                    {
-                        WardenOfTheWildsMod.Log.Warning(
-                            "[WotW] GetCurrentGameDay: timeManager not found.");
-                        return -1;
-                    }
-                    _cachedTimeManager = tm;
-
-                    // Find day counter on TimeManager
-                    string[] dayNames = {
-                        "currentDay", "day", "dayCount", "totalDaysPassed",
-                        "daysPassed", "_currentDay", "numDaysPassed"
-                    };
-                    var tmType = tm.GetType();
-                    foreach (string name in dayNames)
-                    {
-                        var prop = tmType.GetProperty(name, AllInstance);
-                        if (prop != null && prop.CanRead)
-                        {
-                            _cachedDayPropInfo = prop;
-                            WardenOfTheWildsMod.Log.Msg(
-                                $"[WotW] Day counter found: {tmType.Name}.{name} (property)");
-                            break;
-                        }
-                        var field = tmType.GetField(name, AllInstance);
-                        if (field != null)
-                        {
-                            _cachedDayFieldInfo = field;
-                            WardenOfTheWildsMod.Log.Msg(
-                                $"[WotW] Day counter found: {tmType.Name}.{name} (field)");
-                            break;
-                        }
-                    }
-
-                    if (_cachedDayPropInfo == null && _cachedDayFieldInfo == null)
-                    {
-                        // Dump all public properties and fields for debugging
-                        WardenOfTheWildsMod.Log.Warning(
-                            $"[WotW] Day counter not found. TimeManager type: {tmType.Name}");
-                        foreach (var p in tmType.GetProperties(AllInstance))
-                            WardenOfTheWildsMod.Log.Msg($"[WotW]   prop: {p.Name} ({p.PropertyType.Name})");
-                        foreach (var f in tmType.GetFields(AllInstance))
-                            WardenOfTheWildsMod.Log.Msg($"[WotW]   field: {f.Name} ({f.FieldType.Name})");
-                    }
-                }
-
-                if (_cachedTimeManager == null) return -1;
-
-                if (_cachedDayPropInfo != null)
-                    return Convert.ToInt32(_cachedDayPropInfo.GetValue(_cachedTimeManager));
-                if (_cachedDayFieldInfo != null)
-                    return Convert.ToInt32(_cachedDayFieldInfo.GetValue(_cachedTimeManager));
+                // Compute strictly-increasing absolute day since game start.
+                // CETimeSpan uses 360 days/year, 30 days/month — same convention.
+                CEDateTime d = tm.currentDate;
+                return d.year * 360 + (d.month - 1) * 30 + Mathf.FloorToInt(d.day);
             }
             catch (Exception ex)
             {
                 WardenOfTheWildsMod.Log.Warning($"[WotW] GetCurrentGameDay: {ex.Message}");
+                return -1;
             }
-            return -1;
         }
 
         // -- No custom radius circle ----------------------------------------

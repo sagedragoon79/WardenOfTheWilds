@@ -355,6 +355,15 @@ namespace WardenOfTheWilds.Patches
             PatchMethodIfFound(harmony, "Villager", "OnPerformedAttack",
                 nameof(OnPerformedAttackPostfix), isPostfix: true);
 
+            // ── Patch 3b: BGH speed bonus reapply on occupation init ──────────
+            // Vanilla VillagerOccupationHunter.Init() sets curOccupationalSpeedBonus
+            // = combatManager.hunterMoveSpeedBonus (= 0.2), which clobbers our
+            // BGH bonus whenever the hunter's occupation re-initializes. Postfix
+            // re-applies the BGH multiplier so wolves can't catch up to T2
+            // hunters mid-chase.
+            PatchMethodIfFound(harmony, "VillagerOccupationHunter", "Init",
+                nameof(HunterInitPostfix), isPostfix: true);
+
             // ── Patch 4a: Multi-predator retreat — AGGRO trigger ─────────────
             // OnCombatTargetSet is declared on AggressiveAnimal and inherited by
             // Wolf/Boar/Bear. Patching each subclass as well would chain the same
@@ -750,6 +759,41 @@ namespace WardenOfTheWilds.Patches
             catch (Exception ex)
             {
                 MelonLogger.Warning($"[WotW] OnCombatTargetSetPostfix: {ex.Message}");
+            }
+        }
+
+        // ── 3b. VillagerOccupationHunter.Init postfix (BGH speed re-apply) ────
+        /// <summary>
+        /// Vanilla's VillagerOccupationHunter.Init sets
+        /// `curOccupationalSpeedBonus = combatManager.hunterMoveSpeedBonus`
+        /// (≈ 0.2 default) every time a hunter's occupation initializes —
+        /// worker rotation, occupation refresh, save load, etc. That overwrites
+        /// our HuntingLodge × 1.20 bonus, leaving BGH hunters at vanilla
+        /// baseline so wolves catch up mid-chase. Postfix re-applies the
+        /// BGH bonus immediately after vanilla resets, scoped per villager.
+        /// </summary>
+        public static void HunterInitPostfix(object __instance)
+        {
+            try
+            {
+                if (__instance == null) return;
+                // Get villager from the occupation. Field name 'villager' is
+                // confirmed: VillagerOccupation has `public Villager villager`.
+                var villagerField = __instance.GetType().GetField("villager",
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance);
+                if (villagerField == null) return;
+                var villager = villagerField.GetValue(__instance) as Villager;
+                if (villager == null) return;
+
+                if (!(villager.residence is HunterBuilding hb)) return;
+                var enh = hb.GetComponent<HunterCabinEnhancement>();
+                enh?.ApplySpeedBonusToVillager(villager);
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] HunterInitPostfix: {ex.Message}");
             }
         }
 
