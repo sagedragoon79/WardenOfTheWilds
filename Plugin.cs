@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.0", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.1", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -59,6 +59,13 @@ namespace WardenOfTheWilds
         public static MelonPreferences_Entry<int>   SmokehouseMaxWorkers           { get; private set; } = null!;
         public static MelonPreferences_Entry<int>   SmokehouseRawMeatStorageCap    { get; private set; } = null!;
         public static MelonPreferences_Entry<int>   SmokehouseSmokedMeatStorageCap { get; private set; } = null!;
+
+        // Hunter Cabin output buffer cap. Same mechanism as the smokehouse:
+        // each ManufactureDefinition's produced items have a per-item capacity
+        // (default 100) — once full, the worker can't butcher more carcasses
+        // even if there's a queue waiting. Bumping the cap to 200 gives more
+        // breathing room before stalls.
+        public static MelonPreferences_Entry<int>   HunterCabinOutputStorageCap   { get; private set; } = null!;
 
         // SUB-SYSTEM — finer-grained toggles for diagnosis. Each can be turned
         // off independently to isolate a performance issue. Top-level toggles
@@ -437,6 +444,14 @@ namespace WardenOfTheWilds
                              "wagon pickup). Larger output buffer = fewer wagon trips and " +
                              "no production stalls when storehouses are full. 200 units = " +
                              "comfortable wagon-load buffer.");
+
+            HunterCabinOutputStorageCap = cat.CreateEntry("HunterCabinOutputStorageCap", 200,
+                display_name: "Hunter Cabin Output Storage Cap",
+                description: "Capacity for hunter cabin's butcher outputs (Meat, Hide, " +
+                             "Tallow). Vanilla default is 100 — once any output fills up, " +
+                             "the worker can't butcher more carcasses (carcass queue stalls). " +
+                             "Trapper Lodges with high pelt mults are most affected. " +
+                             "200 = double headroom for trap-heavy setups before stalls.");
 
             // Sub-system diagnostics — disable individual parts of the mod
             // to isolate a performance issue. These only matter when their
@@ -915,7 +930,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.0 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.1 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");
@@ -1005,23 +1020,61 @@ namespace WardenOfTheWilds
                 $"{MaxAttempts}s — small-game unlock + spawn tuning skipped.");
         }
 
+        // ── LateInit: a two-phase init/refresh loop for component attachment ─
+        //
+        // Background: heavy saves can take >55s for all hunter / fishing / smoke
+        // buildings to spawn into the scene after a load. With the previous
+        // 15×3s = 45s polling window (post a 10s wait), some users had to
+        // reload 2-3 times before specs would surface (Smokey, May 2026).
+        //
+        // New strategy:
+        //   PHASE 1 — fast attach: 5s initial wait, then 30 attempts × 3s
+        //             = 95s of dense polling. Captures most save loads on
+        //             reasonable hardware.
+        //   PHASE 2 — slow refresh: every 30s forever, re-run TryAttachComponents.
+        //             This handles (a) extreme load times where Phase 1 missed,
+        //             and (b) buildings the player constructs mid-session
+        //             (TryAttachComponents skips already-attached buildings via
+        //             the GetComponent<X>() == null guard, so re-running is safe
+        //             and cheap).
         private IEnumerator LateInit()
         {
-            yield return new WaitForSeconds(10f);
+            yield return new WaitForSeconds(5f);
 
+            // Phase 1: dense polling
             int attempts = 0;
-            while (attempts < 15)
+            const int Phase1Attempts = 30;  // 30 × 3s = 90s
+            while (attempts < Phase1Attempts)
             {
                 attempts++;
                 if (TryAttachComponents())
                 {
                     Log.Msg($"[WotW] Components attached after {attempts} attempt(s).");
-                    yield break;
+                    break;
                 }
                 yield return new WaitForSeconds(3f);
             }
 
-            Log.Warning("[WotW] LateInit: failed to find game buildings after all attempts.");
+            if (attempts >= Phase1Attempts)
+            {
+                Log.Warning(
+                    "[WotW] LateInit Phase 1 didn't catch any buildings in 95s — " +
+                    "switching to Phase 2 slow refresh. New buildings constructed " +
+                    "mid-session will still get specialization UI.");
+            }
+
+            // Phase 2: low-frequency refresh forever (safe — already-attached
+            // buildings are skipped by the null-component guard inside).
+            var slowWait = new WaitForSeconds(30f);
+            while (true)
+            {
+                yield return slowWait;
+                try { TryAttachComponents(); }
+                catch (Exception ex)
+                {
+                    Log.Warning($"[WotW] LateInit Phase 2: {ex.Message}");
+                }
+            }
         }
 
         // ── Tech Tree: Sustainable Fishing ──────────────────────────────────

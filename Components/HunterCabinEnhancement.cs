@@ -80,12 +80,16 @@ namespace WardenOfTheWilds.Components
         //    cost once applies to every cabin). Reset per map so a new save
         //    with different mod settings still applies cleanly.
         private static bool _trapRecipeZeroed = false;
+        // Output caps live on the same shared ManufactureDefinition SOs as the
+        // iron-zeroing — apply once per scene load, propagates to every cabin.
+        private static bool _outputCapsBumped = false;
 
         // ── Scene reset (called from Plugin.OnSceneWasLoaded) ─────────────────
         public static void OnMapLoaded()
         {
             SavedPaths.Clear();
             _trapRecipeZeroed = false;
+            _outputCapsBumped = false;
         }
 
         // ── Unity lifecycle ───────────────────────────────────────────────────
@@ -111,6 +115,16 @@ namespace WardenOfTheWilds.Components
             {
                 _trapRecipeZeroed = true;
                 ZeroTrapRecipeCosts();
+            }
+
+            // Bump produced-item output caps (Meat / Hide / Tallow → 200).
+            // Same one-shot pattern; ScriptableObject is shared globally.
+            // Addresses Trapper carcass-queue stalls when output buffer fills
+            // before laborers haul to a Storehouse (reported May 2026).
+            if (!_outputCapsBumped)
+            {
+                _outputCapsBumped = true;
+                BumpHunterOutputCaps();
             }
 
             WardenOfTheWildsMod.Log.Msg(
@@ -180,6 +194,81 @@ namespace WardenOfTheWilds.Components
             {
                 WardenOfTheWildsMod.Log.Warning(
                     $"[WotW] ZeroTrapRecipeCosts failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Walks the hunter building's ManufactureDefinitions and bumps the
+        /// `capacity` field on each producedItems entry whose item is one of
+        /// Meat / Hide / Tallow (or their carcass-specific variants). Same
+        /// pattern as SmokehouseEnhancement.ApplyStorageCaps — capacity lives
+        /// on ItemDefinition (base class for ProducedItemDefinition), so we
+        /// walk inheritance to find it.
+        ///
+        /// Why: vanilla cap is 100 per output. With Trapper Lodge running 3
+        /// traps at ~10-day interval, Meat output fills to 100 and butchering
+        /// stalls if laborers can't haul fast enough → carcass queue backs up
+        /// (reported by Smokey, May 2026).
+        ///
+        /// Scope: applies to every recipe that outputs Meat/Hide/Tallow, not
+        /// just Trapper. Hunting Lodges benefit too. Other recipes (e.g. trap
+        /// crafting → ItemAnimalTrap) are untouched.
+        /// </summary>
+        private static readonly System.Collections.Generic.HashSet<string> HunterOutputItems
+            = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase)
+            { "ItemMeat", "ItemHide", "ItemTallow" };
+
+        private void BumpHunterOutputCaps()
+        {
+            try
+            {
+                var building = GetComponent<Building>();
+                if (building == null) return;
+
+                int target = System.Math.Max(1, WardenOfTheWildsMod.HunterCabinOutputStorageCap.Value);
+
+                var manuField = FindBackingField(building.GetType(), "manufactureDefinitions");
+                var manuList = manuField?.GetValue(building) as System.Collections.IList;
+                if (manuList == null || manuList.Count == 0) return;
+
+                int bumped = 0;
+                foreach (var manuDef in manuList)
+                {
+                    if (manuDef == null) continue;
+
+                    var prodField = manuDef.GetType().GetField("producedItems", AllInstance);
+                    var prodList = prodField?.GetValue(manuDef) as System.Collections.IList;
+                    if (prodList == null) continue;
+
+                    foreach (var prod in prodList)
+                    {
+                        if (prod == null) continue;
+                        string itemName = GetInheritedString(prod, "itemName");
+                        if (!HunterOutputItems.Contains(itemName)) continue;
+
+                        var capField = GetInheritedField(prod.GetType(), "capacity");
+                        if (capField == null || capField.FieldType != typeof(int)) continue;
+
+                        int current = (int)capField.GetValue(prod);
+                        if (current == target) continue;
+
+                        capField.SetValue(prod, target);
+                        WardenOfTheWildsMod.Log.Msg(
+                            $"[WotW] Hunter output cap ({itemName}): {current} → {target}");
+                        bumped++;
+                    }
+                }
+
+                if (bumped == 0)
+                {
+                    WardenOfTheWildsMod.Log.Msg(
+                        "[WotW] BumpHunterOutputCaps: no recipes matched (already at target?).");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                WardenOfTheWildsMod.Log.Warning(
+                    $"[WotW] BumpHunterOutputCaps failed: {ex.Message}");
             }
         }
 
@@ -472,21 +561,34 @@ namespace WardenOfTheWilds.Components
             // The old "Vanilla" middle path is gone — if _path is still set to
             // Vanilla from a legacy save, we treat it as HuntingLodge.
             //
-            // Worker slots: T2 is ALWAYS 2 workers regardless of mode
-            // (baseline buff). T1 stays at vanilla 1 worker.
+            // Worker slots are PATH-DEPENDENT:
+            //   HuntingLodge (T2) → 2 workers — parallel hunting + butchering
+            //   TrapperLodge (T2) → 1 worker  — single trapper running lines
+            //                                   (matches Trap Master flavour;
+            //                                    second slot was wasted because
+            //                                    the trap auto-cycle doesn't
+            //                                    benefit from a 2nd worker)
+            //   T1 / unspecialised → 1 worker (vanilla)
             //
             // Trap slider: handled by the mode switch (see SetTrapsEnabled /
             // SetTrapCount). For TrapperLodge we push to max, for HuntingLodge
-            // we disable (0). We intentionally do this AFTER SetWorkerSlots so
-            // worker count changes aren't clobbered.
-
-            if (isT2) SetWorkerSlots(2);
-            else      SetWorkerSlots(1);
+            // we disable (0). Worker slots are set FIRST so the trap-count
+            // logic works against the final worker count.
 
             // Normalise legacy Vanilla → HuntingLodge
             HunterT2Path effectivePath = _path == HunterT2Path.Vanilla
                 ? HunterT2Path.HuntingLodge
                 : _path;
+
+            if (isT2)
+            {
+                int workerTarget = effectivePath == HunterT2Path.TrapperLodge ? 1 : 2;
+                SetWorkerSlots(workerTarget);
+            }
+            else
+            {
+                SetWorkerSlots(1);
+            }
 
             switch (effectivePath)
             {
