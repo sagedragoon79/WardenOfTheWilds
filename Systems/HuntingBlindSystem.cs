@@ -21,8 +21,7 @@ using System.Reflection;
 //                  Gold upkeep. Used for both raids and wilderness hunting.
 //
 //  (An earlier design considered a passive "Deer Stand" companion building.
-//   That was dropped — the announced Cat & Dog DLC introduces dogs as a deer
-//   deterrent, which covers that gameplay niche.)
+//   Dropped to keep scope focused on the Hunting Blind itself.)
 //
 //  DUAL USE:
 //    1. WILDERNESS HUNTING:

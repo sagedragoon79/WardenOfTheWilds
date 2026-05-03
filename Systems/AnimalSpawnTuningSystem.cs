@@ -11,7 +11,7 @@ namespace WardenOfTheWilds.Systems
     ///
     /// Vanilla design:
     ///   AnimalGroupDefinition is a ScriptableObject — one asset per animal
-    ///   type (Bear, Wolf, Boar, Deer, Groundhog, Fox). Each carries:
+    ///   type (Bear, Wolf, Boar, Deer). Each carries:
     ///     _maxAnimalCount    — population cap on the map
     ///     _initialSpawnCount — how many appear at game start
     ///     _spawnIntervalInDays — gap between spawn attempts
@@ -124,7 +124,7 @@ namespace WardenOfTheWilds.Systems
                 case "Wolf":      return WardenOfTheWildsMod.WolfSpawnMultiplier.Value;
                 case "Boar":      return WardenOfTheWildsMod.BoarSpawnMultiplier.Value;
                 case "Deer":      return WardenOfTheWildsMod.DeerSpawnMultiplier.Value;
-                default:          return 1.0f;  // Fox / Groundhog handled by unlock system
+                default:          return 1.0f;  // Other species untouched
             }
         }
 

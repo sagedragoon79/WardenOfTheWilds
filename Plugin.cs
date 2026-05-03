@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.2", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.3", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -91,8 +91,8 @@ namespace WardenOfTheWilds
         // ── Hunter config ─────────────────────────────────────────────────────
         /// <summary>Work radius multiplier for Hunting Lodge (1.0 = vanilla).</summary>
         public static MelonPreferences_Entry<float> HuntingLodgeRadiusMult  { get; private set; } = null!;
-        /// <summary>Pelt/fur yield multiplier for Trapper Lodge. Trappers specialise in
-        /// fox and groundhog — pelts are their primary output, not tallow.</summary>
+        /// <summary>Pelt/fur yield multiplier for Trapper Lodge. Pelts are the
+        /// trapper's primary output, not tallow.</summary>
         public static MelonPreferences_Entry<float> TrapperLodgePeltMult    { get; private set; } = null!;
         /// <summary>Maximum deployed traps for Trapper Lodge. Vanilla T2 = 1 trap.
         /// Trapper Lodge raises this to let the trapper run multiple lines simultaneously.
@@ -135,34 +135,7 @@ namespace WardenOfTheWilds
         /// for the Trap Master path — no combat required.</summary>
         public static MelonPreferences_Entry<float> TrapMasterBearChance    { get; private set; } = null!;
 
-        // ── Small-game unlock (fox + groundhog) ──────────────────────────────
-        /// <summary>When true, foxes spawn in-world using their normal biome rules
-        /// instead of the vanilla 1500-day delay that effectively disables them.
-        /// Foxes are fully implemented in game code (wander, food pursuit, retreat)
-        /// but Crate gated them behind a delay.</summary>
-        public static MelonPreferences_Entry<bool>  UnlockFoxSpawns           { get; private set; } = null!;
-        /// <summary>When true, groundhogs spawn in-world using their normal biome rules.
-        /// Same unlock mechanism as foxes — Crate has them gated behind 1500 days.</summary>
-        public static MelonPreferences_Entry<bool>  UnlockGroundhogSpawns     { get; private set; } = null!;
-        /// <summary>Days to wait before foxes begin spawning after map start.
-        /// Vanilla default is 1500 (never). Our unlocked default is 30 days so
-        /// foxes appear in the first in-game year.</summary>
-        public static MelonPreferences_Entry<int>   FoxSpawnDelayDays         { get; private set; } = null!;
-        /// <summary>Days to wait before groundhogs begin spawning after map start.</summary>
-        public static MelonPreferences_Entry<int>   GroundhogSpawnDelayDays   { get; private set; } = null!;
-        /// <summary>In-game days between fox spawn-check ticks. Vanilla = 220 (one
-        /// fox every ~8 months). Counter resets every save load, so the vanilla
-        /// rate is effectively unreachable for active save-load play. Default 60d.</summary>
-        public static MelonPreferences_Entry<int>   FoxSpawnIntervalDays      { get; private set; } = null!;
-        /// <summary>In-game days between groundhog spawn-check ticks. Vanilla = 240.
-        /// Default 60d.</summary>
-        public static MelonPreferences_Entry<int>   GroundhogSpawnIntervalDays { get; private set; } = null!;
-        /// <summary>Minimum world-unit distance a fox must spawn from the nearest
-        /// building. Vanilla = 500 (almost always fails to find a valid position
-        /// on small/medium maps — confirmed via spawn trace). Default 100.</summary>
-        public static MelonPreferences_Entry<int>   FoxMinSpawnDistance       { get; private set; } = null!;
-        /// <summary>Same for groundhogs. Vanilla = 500. Default 100.</summary>
-        public static MelonPreferences_Entry<int>   GroundhogMinSpawnDistance { get; private set; } = null!;
+        // (Small-game spawn-unlock prefs removed in v1.0.3.)
 
         // ── Big game spawn tuning ────────────────────────────────────────────
         /// <summary>Multiplier on bear population cap per map. 1.0 = vanilla,
@@ -571,64 +544,7 @@ namespace WardenOfTheWilds
                              "are deposited directly into the cabin. Passive bear income — " +
                              "no combat required. 0.03 = 3% per catch.");
 
-            UnlockFoxSpawns = cat.CreateEntry("UnlockFoxSpawns", false,
-                display_name: "Unlock Fox Spawns (DORMANT — Cat & Dog DLC incoming)",
-                description: "Crate has announced a Cat & Dog DLC where Foxes (chicken " +
-                             "predators) and Groundhogs (crop pests) become first-class " +
-                             "antagonists. Crate will ship their own balancing for these " +
-                             "creatures. Until that DLC drops and we can evaluate the new " +
-                             "tuning, all Fox/Groundhog overrides in this mod are dormant " +
-                             "(short-circuited at runtime regardless of this pref's value). " +
-                             "Default OFF. Will revisit on DLC release.");
-
-            UnlockGroundhogSpawns = cat.CreateEntry("UnlockGroundhogSpawns", false,
-                display_name: "Unlock Groundhog Spawns (DORMANT — Cat & Dog DLC incoming)",
-                description: "Same status as Unlock Fox Spawns — overrides dormant pending " +
-                             "Cat & Dog DLC release. Crate's tuning takes priority once " +
-                             "the DLC ships.");
-
-            FoxSpawnDelayDays = cat.CreateEntry("FoxSpawnDelayDays", 90,
-                display_name: "Fox Spawn Delay (days)",
-                description: "Days after the FIRST chicken coop is built before foxes begin " +
-                             "spawning (vanilla gates foxes on coop presence). 90 = ~3 months " +
-                             "of coop development before the first fox appears, giving the " +
-                             "player time to establish defenses. More chickens attract more " +
-                             "foxes (vanilla scaling). Lower = aggressive pest pressure, " +
-                             "higher = lenient.");
-
-            GroundhogSpawnDelayDays = cat.CreateEntry("GroundhogSpawnDelayDays", 90,
-                display_name: "Groundhog Spawn Delay (days)",
-                description: "Days after the FIRST crop field is built before groundhogs begin " +
-                             "spawning (vanilla gates groundhogs on field presence). 90 = ~3 " +
-                             "months of farming before crops come under pressure. More fields " +
-                             "attract more groundhog groups.");
-
-            FoxSpawnIntervalDays = cat.CreateEntry("FoxSpawnIntervalDays", 60,
-                display_name: "Fox Spawn Interval (days)",
-                description: "In-game days between each fox spawn-check tick. Vanilla = 220, " +
-                             "but the per-group counter resets to 0 on every save load — so the " +
-                             "vanilla rate is effectively unreachable for active save-load play. " +
-                             "60 = roughly one fox attempt every 2 months in-game. Lower = more " +
-                             "frequent fox encounters; higher = rarer.");
-
-            GroundhogSpawnIntervalDays = cat.CreateEntry("GroundhogSpawnIntervalDays", 60,
-                display_name: "Groundhog Spawn Interval (days)",
-                description: "In-game days between each groundhog spawn-check tick. Vanilla = 240. " +
-                             "60 = roughly one groundhog attempt every 2 months. Lower = more, " +
-                             "higher = rarer.");
-
-            FoxMinSpawnDistance = cat.CreateEntry("FoxMinSpawnDistance", 100,
-                display_name: "Fox Min Spawn Distance (world units)",
-                description: "Minimum world-unit distance a newly-spawned fox must be from the " +
-                             "nearest building. Vanilla = 500u, which on typical FF maps is " +
-                             "larger than the available pathable space — the spawn function " +
-                             "exhausts every edge point and returns 0 actual spawns. " +
-                             "100u keeps foxes from popping next to coops without making " +
-                             "spawning impossible.");
-
-            GroundhogMinSpawnDistance = cat.CreateEntry("GroundhogMinSpawnDistance", 100,
-                display_name: "Groundhog Min Spawn Distance (world units)",
-                description: "Same gate for groundhogs. Vanilla = 500u; default 100u.");
+            // (Small-game spawn-unlock prefs removed in v1.0.3.)
 
             BearSpawnMultiplier = cat.CreateEntry("BearSpawnMultiplier", 1.5f,
                 display_name: "Bear Spawn Multiplier",
@@ -930,7 +846,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.2 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.3 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");
@@ -959,11 +875,10 @@ namespace WardenOfTheWilds
             if (SmokehouseOverhaulEnabled.Value && DiagnosticsEnabled.Value)
                 Systems.SmokehouseDiagnostics.OnMapLoaded();
 
-            // Unlock fox + groundhog spawns (override vanilla 1500-day delays)
-            // and scale bear/wolf/boar/deer caps. animalManager is often null
-            // at scene-loaded time (singleton chain not yet wired up), so defer
-            // until it's available. Without this delay, both systems silently
-            // bail on every load with "animalManager not available".
+            // Scale bear/wolf/boar/deer population caps. animalManager is often
+            // null at scene-loaded time (singleton chain not yet wired up), so
+            // defer until it's available. Without this delay, the system
+            // silently bails on every load with "animalManager not available".
             MelonCoroutines.Start(WaitForAnimalManagerThenInit());
 
             MelonCoroutines.Start(LateInit());
@@ -995,9 +910,9 @@ namespace WardenOfTheWilds
         /// </summary>
         /// <summary>
         /// Polls until GameManager.animalManager is available, then runs the
-        /// fox/groundhog unlock + bear/wolf/boar/deer spawn-tuning systems.
-        /// Both depend on animalManager fields and would silently bail if
-        /// fired at scene-loaded time when the singleton chain isn't ready.
+        /// bear/wolf/boar/deer spawn-tuning system. Depends on animalManager
+        /// fields and would silently bail if fired at scene-loaded time when
+        /// the singleton chain isn't ready.
         /// </summary>
         private IEnumerator WaitForAnimalManagerThenInit()
         {
@@ -1011,8 +926,7 @@ namespace WardenOfTheWilds
                 {
                     Log.Msg(
                         $"[WotW] animalManager ready after {i + 1} poll(s) — " +
-                        "running SmallGameUnlock + AnimalSpawnTuning.");
-                    SmallGameUnlockSystem.OnMapLoaded();
+                        "running AnimalSpawnTuning.");
                     AnimalSpawnTuningSystem.OnMapLoaded();
                     yield break;
                 }
@@ -1021,7 +935,7 @@ namespace WardenOfTheWilds
 
             Log.Warning(
                 "[WotW] animalManager never became available after " +
-                $"{MaxAttempts}s — small-game unlock + spawn tuning skipped.");
+                $"{MaxAttempts}s — spawn tuning skipped.");
         }
 
         // ── LateInit: a two-phase init/refresh loop for component attachment ─

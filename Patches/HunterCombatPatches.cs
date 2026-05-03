@@ -866,7 +866,7 @@ namespace WardenOfTheWilds.Patches
                          IsWolf(animalComp) ||    // Wolf: always charging, always retreat
                          IsAnimalApproaching(animalComp, hunter.transform.position));
                         // Boar/Bear (healthy hunter): only retreat when charging
-                        // Deer/Groundhog: IsDangerousAnimal=false → never retreat
+                        // Deer: IsDangerousAnimal=false → never retreat
 
                     if (shouldRetreat)
                         ApplyPostShotRetreat(hunter, attackTarget.transform.position);
@@ -1985,7 +1985,7 @@ namespace WardenOfTheWilds.Patches
         ///   Bear = 3  (highest yield + highest threat)
         ///   Wolf = 2  (pack threat, good pelt)
         ///   Boar = 1  (moderate)
-        ///   Other = 0 (deer, groundhog, etc.)
+        ///   Other = 0 (deer, etc.)
         /// </summary>
         private static int GetAnimalPriority(Component animal)
         {
@@ -2050,8 +2050,7 @@ namespace WardenOfTheWilds.Patches
 
         /// <summary>
         /// Returns true if the given animal Component is a dangerous predator
-        /// (Wolf, Boar, Bear). Deer and Groundhog don't need kiting.
-        /// Fox is aggressive (AggressiveAnimal confirmed) but lower priority.
+        /// (Wolf, Boar, Bear). Deer doesn't need kiting.
         /// </summary>
         private static bool IsDangerousAnimal(Component animal)
         {
@@ -2825,8 +2824,8 @@ namespace WardenOfTheWilds.Patches
         // FindObjectsOfType is O(N) across ALL MonoBehaviours in the scene; at
         // 60 FPS across multiple consumers (shelter guard, chase safety,
         // proactive scan, carcass defense) it becomes the dominant per-frame
-        // cost, especially after the recent spawn multipliers + Fox unlock
-        // made AggressiveAnimal counts noticeably higher.
+        // cost, especially after the spawn multipliers raise AggressiveAnimal
+        // counts noticeably higher.
         //
         // Refreshes every CacheTTL seconds; all consumers share the snapshot.
         private static AggressiveAnimal[] _cachedAggressive = System.Array.Empty<AggressiveAnimal>();

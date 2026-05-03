@@ -19,13 +19,6 @@ using System.Collections.Generic;
 //    Bear        — healthy (>~25%): CHARGES
 //                  low health (<~25%): tries to FLEE
 //                  Correct hunter tactic: kite while charging, chase when fleeing
-//    Fox         — CONFIRMED AggressiveAnimal (not PassiveAnimal) from 26-4-18 dump
-//                  Has killCount field and foxWanderRadius; predator near ChickenCoops
-//                  Fights back when healthy, flees when wounded
-//                  TrapperLodge handles via traps — HuntingLodge ignores (low priority)
-//    Groundhog   — unknown; likely pure FLEE (pest, crop-raider)
-//                  Has cropsEaten counter — confirmed crop damage mechanic
-//                  TrapperLodge handles via traps — hunter should ignore
 //
 //  WHAT WE NEED FROM THE DECOMPILE:
 //    • Animal state machine class/enum — look for AnimalState, WildAnimalState,
@@ -52,8 +45,6 @@ using System.Collections.Generic;
 //    Bear  CHARGING  → hunter HOLDS at stand, fires rapidly (2 hunters = suppression)
 //    Bear  FLEEING   → hunter ADVANCES for kill shots (safe to close in now)
 //    Deer  FLEEING   → hunter CHASES normally (vanilla behavior is fine)
-//    Fox   *         → hunter IGNORES — TrapperLodge handles this
-//    Groundhog *     → hunter IGNORES — TrapperLodge handles this
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace WardenOfTheWilds.Systems
@@ -77,7 +68,7 @@ namespace WardenOfTheWilds.Systems
         RetreatToStand, // Back up toward stand while firing
         KiteBackward,   // Keep moving away from animal, max range shots
         AdvanceForKill, // Animal is fleeing/wounded — safe to close in
-        Ignore,         // Do not engage (fox, groundhog — trapper's job)
+        Ignore,         // Do not engage
     }
 
     // ── Per-species static profile ────────────────────────────────────────────
@@ -225,38 +216,7 @@ namespace WardenOfTheWilds.Systems
                     "isCharging", "isFleeing", "isPanicked",
                 }),
 
-            ["Fox"] = new AnimalProfile(
-                // CONFIRMED: Fox extends AggressiveAnimal (not PassiveAnimal) —
-                // from 26-4-18 dump. Fox CAN fight back; it has killCount and
-                // foxWanderRadius fields, and is an active predator near ChickenCoops.
-                // IsDangerous = true reflects that it can deal damage if cornered.
-                // Still primarily a TrapperLodge target — HuntingLodge won't kite it
-                // (low health = minimal threat to an experienced hunter).
-                className:              "Fox",
-                isDangerous:            true,   // AggressiveAnimal — can fight back
-                trapperTarget:          true,   // TrapperLodge specialises in fox
-                hunterTarget:           false,  // Hunting Lodge ignores fox — trapper's job
-                megaYield:              1.0f,
-                fleeThreshold:          0.5f,  // Estimated: flees when wounded
-                fightThreshold:         1.0f,  // Fights when healthy (AggressiveAnimal baseline)
-                healthThresholdCandidates: new[] {
-                    "fleeHealthThreshold", "retreatHealthPercent", "panicThreshold",
-                },
-                stateCandidates: new[] {
-                    "currentState", "behaviorState", "state",
-                    "isCharging", "isFleeing", "isAttacking",
-                }),
-
-            ["Groundhog"] = new AnimalProfile(
-                className:              "Groundhog",
-                isDangerous:            false,
-                trapperTarget:          true,   // TrapperLodge specialises in groundhog
-                hunterTarget:           false,  // Hunting Lodge ignores — trapper's job
-                megaYield:              1.0f,
-                fleeThreshold:          1.0f,  // Likely always flees
-                fightThreshold:         0.0f,
-                healthThresholdCandidates: Array.Empty<string>(),
-                stateCandidates: new[] { "currentState", "behaviorState", "isFleeing" }),
+            // (Small-game profiles removed in v1.0.3.)
         };
 
         // ── Runtime phase detection ───────────────────────────────────────────
@@ -300,9 +260,6 @@ namespace WardenOfTheWilds.Systems
 
                 // Wolf: always charging
                 if (typeName == "Wolf") return AnimalPhase.Charging;
-
-                // Fox, Groundhog: always fleeing
-                if (typeName == "Fox" || typeName == "Groundhog") return AnimalPhase.Fleeing;
 
                 // Deer: always fleeing (from hunter perspective)
                 if (typeName == "Deer") return AnimalPhase.Fleeing;
@@ -642,8 +599,6 @@ namespace WardenOfTheWilds.Systems
                 ["Boar"]       = 4.0f,  // Medium charge speed; vanilla hunter can just outrun
                 ["Wolf"]       = 6.0f,  // Fastest — vanilla hunter cannot outrun; FV hunter can
                 ["Bear"]       = 3.5f,  // Slow but dangerous; both vanilla and FV hunters outrun
-                ["Fox"]        = 5.0f,  // Quick flee; trapper target, not relevant to kiting
-                ["Groundhog"]  = 3.0f,  // Slow burrowing pest; trapper target
             };
 
             /// <summary>
@@ -731,7 +686,7 @@ namespace WardenOfTheWilds.Systems
         /// </summary>
         public static void DumpAnimalFields()
         {
-            string[] animalTypes = { "Deer", "Boar", "Wolf", "Bear", "Fox", "Groundhog",
+            string[] animalTypes = { "Deer", "Boar", "Wolf", "Bear",
                                      "PassiveAnimal", "AggressiveAnimal", "WildAnimal" };
 
             foreach (string typeName in animalTypes)

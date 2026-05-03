@@ -28,9 +28,9 @@ using System.Reflection;
 //                  • Work radius multiplied (see Plugin preferences)
 //                  • Access to bear/boar hunting
 //
-//  (Deer Stand placement was an early design idea but was dropped — the
-//   announced Cat & Dog DLC introduces dogs as a deer deterrent, which
-//   covers that niche better than a static deer-attractor structure.)
+//  (Deer Stand placement was an early design idea but was dropped to keep
+//   scope tight; the static-attractor mechanic added complexity without
+//   meaningful upside.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace WardenOfTheWilds.Components
@@ -516,7 +516,7 @@ namespace WardenOfTheWilds.Components
                         "Bears, wolves, and boars are now fair game.",
                     HunterT2Path.TrapperLodge =>
                         "A hunter cabin has become a Trap Master's lodge. " +
-                        "Foxes and groundhogs beware.",
+                        "Pelts and furs are the focus now.",
                     _ => null,  // Vanilla / other transitions: no notification
                 };
                 if (summary == null) return;
@@ -1316,7 +1316,7 @@ namespace WardenOfTheWilds.Components
             {
                 HunterT2Path.TrapperLodge =>
                     $"Pelts x{_cachedPeltMult:F2}  1 worker  |  Traps: Active\n" +
-                    $"Specialises: Fox  Groundhog\n" +
+                    $"Specialises: Small game pelts\n" +
                     $"{(_trapperNearWater ? "Water bonus" : "")}\n" +
                     $"[{keyName}] cycle path",
                 HunterT2Path.HuntingLodge =>
