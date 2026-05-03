@@ -5,3 +5,8 @@ obj/
 *.dll
 *.pdb
 *.cache
+
+# Steam Workshop / Nexus Mods upload assets — kept locally, not versioned
+*.png
+*.jpg
+*.jpeg
