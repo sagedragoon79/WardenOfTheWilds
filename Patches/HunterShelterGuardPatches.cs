@@ -41,6 +41,20 @@ namespace WardenOfTheWilds.Patches
         private static readonly System.Collections.Generic.Dictionary<int, float>
             _lastLog = new System.Collections.Generic.Dictionary<int, float>();
 
+        // ── Cabin Defense Fire registry ──────────────────────────────────────
+        // Hunters currently dispatched out for cabin defense, mapped to the
+        // cabin position they should return to after firing. Read by
+        // HunterCombatPatches.OnPerformedAttackPostfix to issue the recall.
+        // Cleared on attack-completion or when threat is gone.
+        public static readonly System.Collections.Generic.Dictionary<int, Vector3>
+            CabinDefenders = new System.Collections.Generic.Dictionary<int, Vector3>();
+
+        // Per-hunter cooldown so we don't spam SetTarget every shelter tick.
+        // 1.5s lets the attack animation play + projectile fly before re-issue.
+        private static readonly System.Collections.Generic.Dictionary<int, float>
+            _lastDefenseDispatch = new System.Collections.Generic.Dictionary<int, float>();
+        private const float DefenseDispatchCooldown = 1.5f;
+
         // Animal-list cost is handled by HunterCombatPatches.GetCachedAggressiveAnimals
         // (shared 0.75s TTL cache). Per-hunter rate-limiting isn't needed on
         // top — the per-frame cost is now just a distance check loop.
@@ -100,13 +114,25 @@ namespace WardenOfTheWilds.Patches
 
                 if (nearest == null) return;  // no threats → let vanilla decision stand
 
-                // Threat present — block emergence. Clear forcedOut since we're
-                // saying "still hiding, not forced out."
+                int vKey = System.Runtime.CompilerServices
+                    .RuntimeHelpers.GetHashCode(villager);
+
+                // ── Cabin Defense Fire branch ──────────────────────────────
+                // Threat is in range. Before locking the hunter inside, check
+                // if they can fire a defense shot instead of cowering. If
+                // yes: let them out, command attack, register for recall.
+                if (TryDispatchDefenseFire(villager, nearest, vKey, pos))
+                {
+                    // Defense dispatched — let vanilla allow them out for
+                    // combat. Don't alter __result / forcedOut; vanilla's
+                    // own combat-priority logic will handle the exit.
+                    return;
+                }
+
+                // Threat present + defense not eligible — block emergence.
                 __result = false;
                 forcedOutFromHiding = false;
 
-                int vKey = System.Runtime.CompilerServices
-                    .RuntimeHelpers.GetHashCode(villager);
                 if (!_lastLog.TryGetValue(vKey, out float last)
                     || Time.time - last > 5f)
                 {
@@ -120,6 +146,83 @@ namespace WardenOfTheWilds.Patches
             catch (Exception ex)
             {
                 MelonLogger.Warning($"[WotW] HunterShelterGuardPatch: {ex.Message}");
+            }
+        }
+
+        // ── Cabin Defense Fire dispatch ──────────────────────────────────────
+        //
+        // Decides whether a sheltering hunter should step out and fire on a
+        // nearby threat. If yes, issues a SetTarget command and registers the
+        // hunter in CabinDefenders so HunterCombatPatches.OnPerformedAttack
+        // can recall them to the cabin after their shot.
+        //
+        // Returns true when defense was dispatched (caller should let vanilla
+        // allow the hunter out for combat). False when not eligible (caller
+        // applies the normal stay-sheltered behaviour).
+        private static bool TryDispatchDefenseFire(
+            Villager villager, Component threat, int vKey, Vector3 cabinPos)
+        {
+            try
+            {
+                if (!WardenOfTheWildsMod.HunterCabinDefenseEnabled.Value) return false;
+
+                // Per-hunter cooldown so we don't re-issue SetTarget on every
+                // shelter-tick while the previous shot is in flight.
+                if (_lastDefenseDispatch.TryGetValue(vKey, out float lastTime)
+                    && Time.time - lastTime < DefenseDispatchCooldown)
+                {
+                    // Already dispatched recently — leave them on their task.
+                    return true;
+                }
+
+                // HP gate — wounded hunters stay sheltered.
+                float minHp = WardenOfTheWildsMod.HunterCabinDefenseMinHp.Value;
+                if (minHp > 0f)
+                {
+                    float hp = HunterCombatPatches.GetHunterHealthPercentPublic(villager);
+                    if (hp >= 0f && hp < minHp) return false;
+                }
+
+                // Range gate — short-range "tower" defense, not full hunting reach.
+                // Two bounds:
+                //   floor (default 20u) — too close = hunter steps into melee on emerge
+                //   ceiling (default 30u) — too far = out of safe bow range
+                float radius   = Mathf.Max(5f, WardenOfTheWildsMod.HunterCabinDefenseRadius.Value);
+                float minDist  = Mathf.Max(0f, WardenOfTheWildsMod.HunterCabinDefenseMinDist.Value);
+                float dSqr = (threat.transform.position - cabinPos).sqrMagnitude;
+                if (dSqr > radius  * radius)  return false; // out of range
+                if (dSqr < minDist * minDist) return false; // too close — let walls absorb
+
+                // Issue the attack command. Vanilla combat AI handles
+                // movement-to-target, attack animation, projectile.
+                var combatComp = villager.GetComponent<CombatComponent>();
+                var dmg = threat.GetComponent<IDamageable>()
+                       ?? threat.GetComponentInChildren<IDamageable>();
+                if (combatComp == null || dmg == null) return false;
+
+                combatComp.SetTarget(
+                    newTarget: dmg,
+                    newTargetCombatAction: CombatAction.Attack,
+                    newTargetSourceIdentifier: TargetSourceIdentifier.Search);
+
+                CabinDefenders[vKey] = cabinPos;
+                _lastDefenseDispatch[vKey] = Time.time;
+
+                if (!_lastLog.TryGetValue(vKey, out float lastLogT)
+                    || Time.time - lastLogT > 5f)
+                {
+                    _lastLog[vKey] = Time.time;
+                    MelonLogger.Msg(
+                        $"[WotW] Cabin defense: '{villager.gameObject.name}' " +
+                        $"engaging '{threat.gameObject.name}' at " +
+                        $"{Mathf.Sqrt(dSqr):F0}u from cabin (radius={radius:F0}u).");
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] TryDispatchDefenseFire: {ex.Message}");
+                return false;
             }
         }
     }

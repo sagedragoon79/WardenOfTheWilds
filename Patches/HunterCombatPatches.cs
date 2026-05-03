@@ -835,6 +835,24 @@ namespace WardenOfTheWilds.Patches
                 // Backing up during the reload window is baseline survival behavior.
                 if (!IsAnyHunter(hunter)) return;
 
+                // ── Cabin Defense Fire recall ────────────────────────────────
+                // If this hunter was dispatched as a cabin defender (i.e., they
+                // emerged from shelter to fire one shot at a nearby threat),
+                // recall them to the cabin position immediately after the shot
+                // lands. One-shot-then-shelter loop — defender returns, vanilla
+                // shelter logic re-evaluates, defender re-dispatches if threat
+                // still in range and HP still OK.
+                int hKey = System.Runtime.CompilerServices
+                    .RuntimeHelpers.GetHashCode(hunter);
+                if (HunterShelterGuardPatch.CabinDefenders.TryGetValue(hKey, out var cabinPos))
+                {
+                    HunterShelterGuardPatch.CabinDefenders.Remove(hKey);
+                    SetMovementTarget(hunter, cabinPos);
+                    MelonLogger.Msg(
+                        $"[WotW] Cabin defense recall: '{hunter.gameObject.name}' " +
+                        "fired, returning to shelter.");
+                }
+
                 // Use GetGameComponent (not GetComponent<Component>) — the latter
                 // returns Transform first, not the actual Wolf/Deer/etc.
                 var animalComp = GetGameComponent(attackTarget);
@@ -1872,6 +1890,11 @@ namespace WardenOfTheWilds.Patches
         /// HunterCarcassCollection, etc.) can reuse the same hunter check.</summary>
         public static bool IsAnyHunterPublic(Component villager)
             => IsAnyHunter(villager);
+
+        /// <summary>Public wrapper around GetHunterHealthPercent so companion
+        /// patches (HunterShelterGuard cabin-defense gating) can reuse it.</summary>
+        public static float GetHunterHealthPercentPublic(Component hunter)
+            => GetHunterHealthPercent(hunter);
 
         // ════════════════════════════════════════════════════════════════════════
         //  HEALTH / ARROW HELPERS

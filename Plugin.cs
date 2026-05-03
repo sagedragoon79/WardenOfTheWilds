@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.4", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.5", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -66,6 +66,16 @@ namespace WardenOfTheWilds
         // even if there's a queue waiting. Bumping the cap to 200 gives more
         // breathing room before stalls.
         public static MelonPreferences_Entry<int>   HunterCabinOutputStorageCap   { get; private set; } = null!;
+
+        // Hunter Cabin Defense — sheltering hunters fire on threats in short
+        // range instead of sitting idle while laborers melee a wolf at the
+        // doorstep. Implemented as a SetTarget command issued from our shelter-
+        // guard tick, with a post-shot recall that returns the hunter to the
+        // cabin once they've landed an arrow (one-shot-then-shelter loop).
+        public static MelonPreferences_Entry<bool>  HunterCabinDefenseEnabled    { get; private set; } = null!;
+        public static MelonPreferences_Entry<float> HunterCabinDefenseRadius     { get; private set; } = null!;
+        public static MelonPreferences_Entry<float> HunterCabinDefenseMinDist    { get; private set; } = null!;
+        public static MelonPreferences_Entry<float> HunterCabinDefenseMinHp      { get; private set; } = null!;
 
         // SUB-SYSTEM — finer-grained toggles for diagnosis. Each can be turned
         // off independently to isolate a performance issue. Top-level toggles
@@ -425,6 +435,37 @@ namespace WardenOfTheWilds
                              "the worker can't butcher more carcasses (carcass queue stalls). " +
                              "Trapper Lodges with high pelt mults are most affected. " +
                              "200 = double headroom for trap-heavy setups before stalls.");
+
+            HunterCabinDefenseEnabled = cat.CreateEntry("HunterCabinDefenseEnabled", true,
+                display_name: "Hunter Cabin Defense Fire",
+                description: "When ON, hunters sheltering in their cabin will fire on " +
+                             "aggressive animals (Wolf / Boar / Bear) in short range instead " +
+                             "of sitting idle while laborers melee the threat outside. The " +
+                             "hunter steps out, fires one arrow, and returns to shelter — " +
+                             "guard-tower-style defense. Skips when wounded (see " +
+                             "HunterCabinDefenseMinHp).");
+
+            HunterCabinDefenseRadius = cat.CreateEntry("HunterCabinDefenseRadius", 30f,
+                display_name: "Hunter Cabin Defense Radius (world units)",
+                description: "Maximum engagement range for cabin defense fire. Vanilla bow " +
+                             "range is ~40u; default 30u keeps the behaviour short-range " +
+                             "\"home defense\" rather than letting cabin-bound hunters reach " +
+                             "across their full hunting radius. Pairs with " +
+                             "HunterCabinDefenseMinDist for the close-range floor.");
+
+            HunterCabinDefenseMinDist = cat.CreateEntry("HunterCabinDefenseMinDist", 20f,
+                display_name: "Hunter Cabin Defense Minimum Threat Distance",
+                description: "Don't dispatch defense fire if the threat is closer than this " +
+                             "to the cabin. Stepping out at point-blank range puts the " +
+                             "hunter in immediate melee — better to let walls take the hit. " +
+                             "Default 20u: hunter engages threats in the 20-30u band " +
+                             "(safe bow range), stays sheltered for anything closer.");
+
+            HunterCabinDefenseMinHp = cat.CreateEntry("HunterCabinDefenseMinHp", 0.5f,
+                display_name: "Hunter Cabin Defense Min HP (0–1)",
+                description: "Hunter must be ≥ this fraction of full HP to engage in cabin " +
+                             "defense fire. 0.5 = half health. Wounded hunters stay sheltered " +
+                             "regardless of nearby threats. Set to 0 to allow wounded engagement.");
 
             // Sub-system diagnostics — disable individual parts of the mod
             // to isolate a performance issue. These only matter when their
@@ -845,7 +886,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.4 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.5 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");
