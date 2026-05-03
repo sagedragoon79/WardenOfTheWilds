@@ -125,8 +125,24 @@ namespace WardenOfTheWilds.Patches
             }
         }
 
-        private const float HunterCacheTTL   = 10f;
-        private const float BuildingCacheTTL =  5f;
+        // CACHE TTLs: bumped aggressively in v1.0.2 after community FPS reports.
+        // Root cause: each TTL expiry triggers FindObjectsOfType<T> which is a
+        // scene-wide MonoBehaviour walk — measured at 50-200ms in populated
+        // towns. The L1 (per-villager) and L2 (HunterBuilding list) caches
+        // share consumers, so when both expire concurrently a single combat
+        // target acquisition forces a full scan that lands as a 1-second hitch.
+        //
+        // Buildings rarely change (player constructs maybe one every few minutes
+        // at most). Hunters rarely change residence (handled explicitly by our
+        // OnResidentAdded/OnResidentRemoved postfixes that purge the cache
+        // entry). So very long TTLs are safe.
+        //
+        // Was: 10s / 5s. Now: 5min / 5min. Building/hunter mutations route through
+        // explicit cache invalidation (PurgeDeadHunterFromRegistries +
+        // OnResidentAdded/Removed postfixes), so staleness is bounded by those
+        // events, not by the wall-clock TTL.
+        private const float HunterCacheTTL   = 300f;
+        private const float BuildingCacheTTL = 300f;
 
         // ── Single-predator LOW HP grace window ──────────────────────────────
         // When a single hit drops the hunter below the HP threshold with only
@@ -2815,11 +2831,13 @@ namespace WardenOfTheWilds.Patches
         // Refreshes every CacheTTL seconds; all consumers share the snapshot.
         private static AggressiveAnimal[] _cachedAggressive = System.Array.Empty<AggressiveAnimal>();
         private static float _aggressiveCacheExpiry = 0f;
-        // 2s TTL — animals move slowly enough that a 2-second lag is imperceptible
-        // for chase-safety / proactive-engagement decisions, and this cache fires
-        // every tick from EvaluateChaseSafety during active hunts. 0.75s produced
-        // ~1.3Hz FindObjectsOfType scans and was the main combat-era stutter source.
-        private const float AggressiveCacheTTL = 2.0f;
+        // TTL bumped 2s → 5s in v1.0.2 — animals move slowly, 5s lag in cache
+        // freshness is fine for chase-safety / proactive-engagement decisions.
+        // FindObjectsOfType<AggressiveAnimal> is one of two periodic scene-walks
+        // identified as the cause of the v1.0.0/1.0.1 1-second hitch every ~4-5s.
+        // Was: 2s (= 0.5Hz scan). Now: 5s (= 0.2Hz scan). HunterBuilding cache
+        // bumped to 300s (above) since buildings barely change.
+        private const float AggressiveCacheTTL = 5f;
 
         public static AggressiveAnimal[] GetCachedAggressiveAnimals()
         {
