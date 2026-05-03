@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.3", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.4", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -196,9 +196,9 @@ namespace WardenOfTheWilds
         /// <summary>Hunter crossbow reload time in seconds. Crossbows fire slower but hit harder —
         /// longer reload = hunter should back up further per shot cycle.</summary>
         public static MelonPreferences_Entry<float> CrossbowReloadSeconds        { get; private set; } = null!;
-        /// <summary>If true, Hunting Lodge hunters targeting Boar/Wolf/Bear will retreat
-        /// to a Hunting Stand position before engaging, rather than chasing into the wild.
-        /// Requires at least one Hunting Stand within work radius.</summary>
+        /// <summary>If true, Hunting Lodge hunters targeting Boar/Wolf/Bear will fall
+        /// back toward a Hunting Blind (or the cabin) between shots, rather than
+        /// chasing into the wild. Provides a controlled engagement zone for big game.</summary>
         public static MelonPreferences_Entry<bool>  HuntingLodgeKitingEnabled    { get; private set; } = null!;
         /// <summary>Health percentage (0–1) below which a hunter refuses to engage predators
         /// and retreats instead. Applies to all tiers — a wounded hunter should not pick fights.
@@ -642,12 +642,11 @@ namespace WardenOfTheWilds
 
             HuntingLodgeKitingEnabled = cat.CreateEntry("HuntingLodgeKitingEnabled", true,
                 display_name: "Hunting Lodge Kiting Enabled",
-                description: "When enabled and a Hunting Stand is within work radius, Hunting Lodge " +
-                             "hunters will move to the stand position before engaging Boar/Wolf/Bear, " +
-                             "rather than chasing them into the wilderness. This draws dangerous " +
-                             "animals to a controlled engagement zone — the hunter shoots from the " +
-                             "stand, retreats if wounded, then re-engages. Requires decompile of " +
-                             "hunter pathfinding/retreat methods to implement fully.");
+                description: "When ON, Hunting Lodge hunters engaging Boar / Wolf / Bear " +
+                             "fall back between shots — toward a Hunting Blind in their work " +
+                             "radius if one exists, otherwise toward their cabin. Maintains " +
+                             "safe distance during reload and avoids long chases into the " +
+                             "wilderness. OFF = vanilla pursue-and-fire behaviour.");
 
             HunterLowHealthThreshold = cat.CreateEntry("HunterLowHealthThreshold", 0.50f,
                 display_name: "Hunter Low Health Retreat Threshold",
@@ -846,7 +845,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.3 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.4 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");

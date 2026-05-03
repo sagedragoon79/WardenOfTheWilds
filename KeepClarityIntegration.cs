@@ -150,7 +150,7 @@ namespace WardenOfTheWilds
             Reg("Hunting Lodge", WardenOfTheWildsMod.HuntingLodgeBigGameShootMult,
                 NewMeta("Big-game Shoot Interval Mult.", min: 0.25f, max: 2.0f, tooltip: "Lower = faster fire rate vs Boar/Wolf/Bear"));
             Reg("Hunting Lodge", WardenOfTheWildsMod.HuntingLodgeKitingEnabled,
-                NewMeta("Kiting AI", "Hunters retreat to Hunting Stand before engaging dangerous prey"));
+                NewMeta("Kiting AI", "Hunters fall back to Hunting Blind / cabin between shots vs. dangerous prey"));
             Reg("Hunting Lodge", WardenOfTheWildsMod.HuntingLodgeButcherSpeedMult,
                 NewMeta("Butcher Speed Multiplier", min: 0.5f, max: 3.0f, tooltip: "Per-worker — combined with 2 workers"));
 

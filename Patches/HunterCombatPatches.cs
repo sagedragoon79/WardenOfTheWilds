@@ -643,7 +643,7 @@ namespace WardenOfTheWilds.Patches
         /// Kiting intercept:
         ///   1. Check: is this a HuntingLodge hunter?
         ///   2. Check: is the new target a dangerous animal (Wolf/Boar/Bear)?
-        ///   3. Find nearest Hunting Stand/Blind within work radius.
+        ///   3. Find nearest Hunting Blind within work radius.
         ///   4. If found, redirect hunter's movement to the stand BEFORE engaging.
         ///
         /// The hunter will still shoot at the animal once they arrive — vanilla AI
@@ -751,7 +751,7 @@ namespace WardenOfTheWilds.Patches
                 if (!isDangerous) return;
                 if (!IsHuntingLodgeHunter(hunter)) return;
 
-                // Find the nearest Hunting Stand or Blind within work radius
+                // Find the nearest Hunting Blind within work radius
                 Component? cabin = FindCabinForHunter(hunter);
                 float workRadius = 100f * WardenOfTheWildsMod.HuntingLodgeRadiusMult.Value;
                 Vector3 cabinPos = cabin != null

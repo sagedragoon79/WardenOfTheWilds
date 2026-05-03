@@ -13,7 +13,7 @@ using System.Collections.Generic;
 //    Boar        — healthy: FLEES from hunter
 //                  wounded (below threshold ~50%?): turns and FIGHTS BACK
 //                  !! Do NOT chase a fleeing boar — it will reverse on you !!
-//                  Correct hunter tactic: hold at Hunting Stand, let it close
+//                  Correct hunter tactic: hold at Hunting Blind, let it close
 //    Wolf        — always AGGRESSIVE; never flees; straight charge
 //                  Correct hunter tactic: kite backwards, shoot while retreating
 //    Bear        — healthy (>~25%): CHARGES
@@ -64,7 +64,7 @@ namespace WardenOfTheWilds.Systems
     public enum HunterResponse
     {
         VanillaAI,   // Let vanilla handle it (deer, unknown animals)
-        HoldAtStand, // Stay at Hunting Stand position, fire from there
+        HoldAtStand, // Stay at Hunting Blind position, fire from there
         RetreatToStand, // Back up toward stand while firing
         KiteBackward,   // Keep moving away from animal, max range shots
         AdvanceForKill, // Animal is fleeing/wounded — safe to close in
@@ -388,7 +388,7 @@ namespace WardenOfTheWilds.Systems
 
         // ── Animal movement speed reader ──────────────────────────────────────
         // Needed to compare against hunter speed — determines whether the hunter
-        // can outrun the animal or needs the Hunting Stand as a hard backstop.
+        // can outrun the animal or needs the Hunting Blind as a hard backstop.
         private static readonly string[] AnimalSpeedCandidates = {
             "moveSpeed", "movementSpeed", "speed", "runSpeed",
             "chaseSpeed", "chargeSpeed", "walkSpeed",
@@ -440,7 +440,7 @@ namespace WardenOfTheWilds.Systems
         ///
         ///   canOutrunAnimal = hunterSpeed > animalSpeed
         ///   — If true: hunter kites indefinitely.
-        ///   — If false: hunter MUST use the Hunting Stand as a backstop.
+        ///   — If false: hunter MUST use the Hunting Blind as a backstop.
         ///     The stand absorbs the closing distance the hunter can't escape.
         ///
         /// ALL values are -1 until confirmed from the combat dump.
@@ -607,7 +607,7 @@ namespace WardenOfTheWilds.Systems
             ///
             /// retreatDistance = reloadTime × hunterSpeed
             ///
-            /// The kiting system moves the hunter this far toward the Hunting Stand
+            /// The kiting system moves the hunter this far toward the Hunting Blind
             /// (or cabin) immediately after each shot fires, so that by the time
             /// the bow is ready again the hunter has put maximum distance between
             /// themselves and the animal — without wasting any reload time standing still.
@@ -624,7 +624,7 @@ namespace WardenOfTheWilds.Systems
 
             /// <summary>
             /// Returns true if the hunter can outrun this animal type.
-            /// If false, the Hunting Stand is a required backstop — the hunter
+            /// If false, the Hunting Blind is a required backstop — the hunter
             /// cannot kite indefinitely in open terrain.
             /// </summary>
             public static bool CanOutrun(float hunterSpeed, string animalTypeName)
