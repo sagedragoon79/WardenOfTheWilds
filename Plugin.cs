@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.6", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.7", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -897,7 +897,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.6 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.7 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");

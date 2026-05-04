@@ -130,6 +130,18 @@ namespace WardenOfTheWilds.Components
             WardenOfTheWildsMod.Log.Msg(
                 $"[WotW] HunterCabinEnhancement attached to '{gameObject.name}' " +
                 $"(key={GetBuildingKey()}, path={_path})");
+
+            // Trapper meat-stuck diagnostic. Gated by DiagnosticsEnabled (default
+            // OFF — verbose log dump for investigating community-reported issue
+            // where Trapper Lodges accumulate meat past the 200 cap and become
+            // invisible to nearby smokehouses / wagons. The probe samples both
+            // storage pools and unreserved counts so we can see whether meat is:
+            //   (A) sitting in base.storage but reserved by stuck tasks
+            //   (B) routed to manufacturingStorage instead of base.storage
+            //   (C) properly in base.storage but the cabin failed to register
+            //       in the HasItemMeat work bucket
+            if (WardenOfTheWildsMod.DiagnosticsEnabled.Value)
+                StartCoroutine(TrapperMeatDiagnosticLoop());
         }
 
         /// <summary>
@@ -1367,6 +1379,92 @@ namespace WardenOfTheWilds.Components
                 t = t.BaseType;
             }
             return null;
+        }
+
+        // ── Trapper meat-stuck diagnostic ────────────────────────────────────
+        //
+        // Runs every 30 seconds while DiagnosticsEnabled = true. Logs the
+        // cabin's storage state for every hunter cabin (so we can compare
+        // Trapper Lodge against Hunting Lodge / unspecialised). Output looks
+        // like:
+        //
+        // [WotW] [TrapperDiag] 'HunterShack_tier2_01A(Clone) #3' path=TrapperLodge
+        //   base.storage:           Meat=N (unres=N)  Hide=N  Tallow=N
+        //   manufacturingStorage:   Meat=N  Hide=N  Tallow=N  Carcass=N  Small=N
+        //   GetItemCountFromAllStorages(Meat) = N
+        //
+        // Signals to look for in the captured log:
+        //   • base.storage Meat HIGH but unres=0 → reservation leak (path A)
+        //   • base.storage Meat = 0 but manufacturing Meat HIGH → routing bug (B)
+        //   • base.storage Meat HIGH and unres MATCHES → cabin should be visible
+        //     (then bucket-registration is the problem — path C)
+        private IEnumerator TrapperMeatDiagnosticLoop()
+        {
+            // Wait one frame so Building.Start has run and storages are wired up.
+            yield return null;
+
+            var building = GetComponent<Building>();
+            var hunterBld = GetComponent<HunterBuilding>();
+            if (building == null) yield break;
+
+            // Resolve item refs once
+            var gm  = UnitySingleton<GameManager>.Instance;
+            var wbm = gm?.workBucketManager;
+            if (wbm == null) yield break;
+
+            var itemMeat        = wbm.itemMeat;
+            var itemHide        = wbm.itemHide;
+            var itemTallow      = wbm.itemTallow;
+            var itemCarcass     = wbm.itemCarcass;
+            var itemSmallCarc   = wbm.itemSmallCarcass;
+            var itemBoarCarc    = wbm.itemBoarCarcass;
+            var itemWolfCarc    = wbm.itemWolfCarcass;
+
+            var wait = new WaitForSeconds(30f);
+            while (this != null && gameObject != null)
+            {
+                yield return wait;
+                if (!WardenOfTheWildsMod.DiagnosticsEnabled.Value) continue;
+
+                try
+                {
+                    var storage     = building.storage;
+                    var manuStorage = building.manufacturingStorage;
+
+                    // base.storage counts
+                    uint sMeat   = storage?.GetItemCount(itemMeat) ?? 0;
+                    uint sHide   = storage?.GetItemCount(itemHide) ?? 0;
+                    uint sTallow = storage?.GetItemCount(itemTallow) ?? 0;
+                    uint sUnresMeat = storage?.GetNumberOfUnreservedItems(itemMeat) ?? 0;
+                    uint sUnresHide = storage?.GetNumberOfUnreservedItems(itemHide) ?? 0;
+
+                    // manufacturingStorage counts
+                    uint mMeat   = manuStorage?.GetItemCount(itemMeat)        ?? 0;
+                    uint mHide   = manuStorage?.GetItemCount(itemHide)        ?? 0;
+                    uint mTallow = manuStorage?.GetItemCount(itemTallow)      ?? 0;
+                    uint mCarc   = manuStorage?.GetItemCount(itemCarcass)     ?? 0;
+                    uint mSmall  = manuStorage?.GetItemCount(itemSmallCarc)   ?? 0;
+                    uint mBoar   = manuStorage?.GetItemCount(itemBoarCarc)    ?? 0;
+                    uint mWolf   = manuStorage?.GetItemCount(itemWolfCarc)    ?? 0;
+
+                    // Combined (matches UI display)
+                    uint allMeat   = building.GetItemCountFromAllStorages(itemMeat);
+                    uint allHide   = building.GetItemCountFromAllStorages(itemHide);
+                    uint allTallow = building.GetItemCountFromAllStorages(itemTallow);
+
+                    WardenOfTheWildsMod.Log.Msg(
+                        $"[WotW] [TrapperDiag] '{gameObject.name}' path={_path}\n" +
+                        $"  base.storage:         Meat={sMeat} (unres={sUnresMeat})  " +
+                        $"Hide={sHide} (unres={sUnresHide})  Tallow={sTallow}\n" +
+                        $"  manufacturingStorage: Meat={mMeat}  Hide={mHide}  Tallow={mTallow}  " +
+                        $"Carcass={mCarc}  Small={mSmall}  Boar={mBoar}  Wolf={mWolf}\n" +
+                        $"  GetItemCountFromAllStorages: Meat={allMeat}  Hide={allHide}  Tallow={allTallow}");
+                }
+                catch (System.Exception ex)
+                {
+                    WardenOfTheWildsMod.Log.Warning($"[WotW] TrapperDiag '{gameObject.name}': {ex.Message}");
+                }
+            }
         }
 
         private static FieldInfo? FindField(System.Type startType, string fieldName)
