@@ -2691,6 +2691,16 @@ namespace WardenOfTheWilds.Patches
                 if (hunter == null) return;
                 if (!IsAnyHunter(hunter)) return;
 
+                // ── Equipment gate ────────────────────────────────────────────
+                // If the hunter has no bow or insufficient arrows, cancel the
+                // hunt task. Vanilla SeekArrows logistics request will then
+                // win the next task evaluation and a laborer brings restock.
+                if (HunterEquipmentGatePatches.IsHunterUnderEquipped(hunter))
+                {
+                    __result = false; // stop wandering — go restock first
+                    return;
+                }
+
                 // Get building + hunting radius for both chase safety and proactive scans
                 Component? hBuilding = _huntSubHunterBuilding?.GetValue(__instance) as Component;
                 float hRadius = hBuilding != null ? GetHunterBuildingRadius(hBuilding) : 100f;

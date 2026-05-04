@@ -54,6 +54,19 @@ namespace WardenOfTheWilds.Patches
                 var hunter = receiver as Component;
                 if (hunter == null) return true;  // can't evaluate, let vanilla run
 
+                // ── Equipment gate ────────────────────────────────────────
+                // Don't send a hunter out to collect a carcass if they're
+                // under-equipped (no bow / arrows below threshold). They'd
+                // walk into wolf territory unable to defend themselves.
+                // Cancelling the task forces vanilla to re-evaluate; the
+                // SeekArrows logistics request wins by default once other
+                // tasks self-disqualify.
+                if (HunterEquipmentGatePatches.IsHunterUnderEquipped(hunter))
+                {
+                    __result = null;
+                    return false;
+                }
+
                 var getHB = typeof(CollectCarcassesSearchEntry).GetMethod(
                     "GetHunterBuilding", AllInstance);
                 var hunterBuilding = getHB?.Invoke(__instance, null) as Component;

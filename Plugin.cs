@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.5", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.6", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -72,6 +72,7 @@ namespace WardenOfTheWilds
         // doorstep. Implemented as a SetTarget command issued from our shelter-
         // guard tick, with a post-shot recall that returns the hunter to the
         // cabin once they've landed an arrow (one-shot-then-shelter loop).
+        public static MelonPreferences_Entry<bool>  HunterRequiresBowForWork     { get; private set; } = null!;
         public static MelonPreferences_Entry<bool>  HunterCabinDefenseEnabled    { get; private set; } = null!;
         public static MelonPreferences_Entry<float> HunterCabinDefenseRadius     { get; private set; } = null!;
         public static MelonPreferences_Entry<float> HunterCabinDefenseMinDist    { get; private set; } = null!;
@@ -699,12 +700,21 @@ namespace WardenOfTheWilds
                              "a wounded hunter retreats from even a fleeing Boar.");
 
             HunterMinArrows = cat.CreateEntry("HunterMinArrows", 10,
-                display_name: "Hunter Minimum Arrows Before Hunting",
-                description: "Minimum arrows a hunter must carry before engaging prey. If their " +
-                             "quiver drops below this count they will path back to their assigned " +
-                             "building to restock rather than continuing to hunt dry. " +
-                             "0 = disable check. Requires the arrow-count field to be located in " +
-                             "the Assembly-CSharp dump — see log for discovery status.");
+                display_name: "Hunter Minimum Arrows Before Working",
+                description: "Hunters with fewer than this many carried arrows will be blocked " +
+                             "from hunting / collecting carcasses / butchering, forcing them " +
+                             "to restock before resuming work. Also bumps vanilla's arrow-seek " +
+                             "logistics threshold (vanilla = 2) so laborers deliver replacements " +
+                             "the moment carried count drops below this number. 0 = disable " +
+                             "the work gate (vanilla logistics threshold still bumped).");
+
+            HunterRequiresBowForWork = cat.CreateEntry("HunterRequiresBowForWork", true,
+                display_name: "Hunter Requires Bow For Work",
+                description: "When ON, hunters with no bow / crossbow are blocked from " +
+                             "hunting / collecting carcasses / butchering until vanilla " +
+                             "logistics delivers a replacement. Prevents bowless hunters " +
+                             "from getting eaten while gathering carcasses. OFF = vanilla " +
+                             "behaviour (a bowless hunter will go work and likely die).");
 
             HunterShelterSearchRadius = cat.CreateEntry("HunterShelterSearchRadius", 45f,
                 display_name: "Hunter Cabin Emergence Radius (u)",
@@ -861,6 +871,7 @@ namespace WardenOfTheWilds
 
             HunterCabinPatches.ApplyPatches(HarmonyInstance);
             HunterCombatPatches.ApplyPatches(HarmonyInstance);
+            HunterEquipmentGatePatches.Apply(HarmonyInstance);
             FishingShackPatches.ApplyPatches(HarmonyInstance);
             FishingShackLoadPatches.Register(HarmonyInstance);
 
@@ -886,7 +897,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.5 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.6 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");
