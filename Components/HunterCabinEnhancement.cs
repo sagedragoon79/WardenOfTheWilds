@@ -127,6 +127,23 @@ namespace WardenOfTheWilds.Components
                 BumpHunterOutputCaps();
             }
 
+            // ── Migrate stuck bear-bonus meat/hide/tallow from saves <= v1.0.7 ──
+            //
+            // v1.0.0 - v1.0.7 had a bug: BearBonusYieldPatches and
+            // TrapMasterBearPatches added bonus items into cabin.manufacturingStorage
+            // (the carcass INPUT pool) instead of cabin.storage (the OUTPUT pool).
+            // Vanilla's HasItemMeat work bucket queries only base.storage, so
+            // those items were invisible to smokehouses, wagons, and laborers.
+            // Reports of 1000+ meat stuck in long-running Trap Master cabins.
+            //
+            // v1.0.8 fixes the bear-bonus patches to target cabin.storage. This
+            // migration handles the LEGACY stuck items from prior versions:
+            // walk manufacturingStorage, transfer Meat/Hide/Tallow to
+            // base.storage. Runs once per cabin per session — items moved are
+            // immediately visible to logistics on the next CheckWorkAvailability
+            // tick.
+            DrainStuckBearBonusItems();
+
             WardenOfTheWildsMod.Log.Msg(
                 $"[WotW] HunterCabinEnhancement attached to '{gameObject.name}' " +
                 $"(key={GetBuildingKey()}, path={_path})");
@@ -1379,6 +1396,74 @@ namespace WardenOfTheWilds.Components
                 t = t.BaseType;
             }
             return null;
+        }
+
+        // ── Migration: drain stuck bear-bonus items from manufacturingStorage ──
+        //
+        // For users coming from v1.0.0-1.0.7 with cabins that have accumulated
+        // bear-bonus meat/hide/tallow in manufacturingStorage. Walks the input
+        // pool, removes any of those three items, transfers to base.storage so
+        // vanilla logistics can see them.
+        //
+        // Carcasses (the legitimate manufacturingStorage residents) are left
+        // alone — the worker still butchers them via the normal flow.
+        //
+        // Runs once per cabin per session (the InitializeDelayed coroutine is
+        // single-shot via _initialized). Idempotent on subsequent reloads:
+        // if no stuck items exist, the method exits with a single "0 drained"
+        // log line and is otherwise free.
+        private void DrainStuckBearBonusItems()
+        {
+            try
+            {
+                var building = GetComponent<Building>();
+                if (building == null) return;
+
+                var storage     = building.storage;
+                var manuStorage = building.manufacturingStorage;
+                if (storage == null || manuStorage == null) return;
+
+                var wbm = UnitySingleton<GameManager>.Instance?.workBucketManager;
+                if (wbm == null) return;
+
+                uint drainedMeat   = TransferAll(manuStorage, storage, wbm.itemMeat);
+                uint drainedHide   = TransferAll(manuStorage, storage, wbm.itemHide);
+                uint drainedTallow = TransferAll(manuStorage, storage, wbm.itemTallow);
+
+                if (drainedMeat + drainedHide + drainedTallow > 0)
+                {
+                    WardenOfTheWildsMod.Log.Msg(
+                        $"[WotW] '{gameObject.name}' migrated stuck bear-bonus items " +
+                        $"from manufacturingStorage → storage: " +
+                        $"+{drainedMeat} meat, +{drainedHide} hide, +{drainedTallow} tallow. " +
+                        "These were invisible to logistics in v1.0.0-1.0.7; now hauled normally.");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                WardenOfTheWildsMod.Log.Warning(
+                    $"[WotW] DrainStuckBearBonusItems on '{gameObject.name}': {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Removes ALL unreserved instances of `item` from `from` and adds them
+        /// to `to`. Returns the number transferred. Carcasses and other items
+        /// are untouched. Uses ReservableItemStorage.RemoveUnreservedItemsClamped
+        /// (same API used by vanilla's heavy-tool transfer path in Building.cs).
+        /// </summary>
+        private static uint TransferAll(
+            ReservableItemStorage from, ReservableItemStorage to, Item item)
+        {
+            if (item == null) return 0;
+            uint count = from.GetItemCount(item);
+            if (count == 0) return 0;
+
+            var bundle = from.RemoveUnreservedItemsClamped(item, count, null);
+            if (bundle == null || bundle.numberOfItems == 0) return 0;
+
+            uint added = to.AddItems(bundle);
+            return added;
         }
 
         // ── Trapper meat-stuck diagnostic ────────────────────────────────────

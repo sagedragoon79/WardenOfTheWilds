@@ -21,11 +21,19 @@ namespace WardenOfTheWilds.Patches
     ///   ItemCarcass — extra items added to the CarcassResource.storage
     ///   would either sit unreserved (laborers then pick them up, which the
     ///   user explicitly doesn't want) or rot with the carcass. Injecting the
-    ///   bonus directly into the killing hunter's cabin manufacturingStorage
-    ///   bypasses the pickup pipeline entirely: the reward appears in the
-    ///   cabin immediately, the ItemCarcass is still collected + butchered
-    ///   by the normal flow, and the Smokehouse picks up meat from the cabin
-    ///   as usual.
+    ///   bonus directly into the killing hunter's cabin storage bypasses the
+    ///   pickup pipeline entirely: the reward appears in the cabin
+    ///   immediately, the ItemCarcass is still collected + butchered by the
+    ///   normal flow, and the Smokehouse picks up meat from the cabin as usual.
+    ///
+    /// IMPORTANT (May 2026 fix): items go to cabin.storage (the OUTPUT pool),
+    /// NOT manufacturingStorage (the carcass INPUT pool). Vanilla's
+    /// CheckWorkAvailabilityForItem only queries base.storage to register the
+    /// HasItemMeat work bucket — meat in manufacturingStorage is invisible to
+    /// smokehouse pull / wagon push logistics. The earlier (broken) version of
+    /// this patch dumped bonus into manufacturingStorage, causing meat to
+    /// silently accumulate to 1000+ units that nobody could see. Fixed by
+    /// targeting base.storage directly, matching vanilla's ProduceItems flow.
     ///
     /// Gating:
     ///   • A BGH hunter (Hunting Lodge path) must appear in the bear's
@@ -77,15 +85,17 @@ namespace WardenOfTheWilds.Patches
                     return;
                 }
 
-                // Target storage: cabin's manufacturingStorage. This is where the
-                // butcher pipeline operates; smokehouses / general collectors pick
-                // finished meat/hide/tallow up from here.
-                var storage = cabin.manufacturingStorage;
+                // Target storage: cabin's `storage` (the OUTPUT pool — same place
+                // vanilla's ProduceItems writes butcher output). manufacturingStorage
+                // is the INPUT pool (carcasses awaiting butchering) and would
+                // be invisible to smokehouse/wagon logistics. See class header
+                // for the full bug history.
+                var storage = cabin.storage;
                 if (storage == null)
                 {
                     MelonLogger.Warning(
                         $"[WotW] BearBonusYield: cabin '{cabin.gameObject.name}' " +
-                        $"has no manufacturingStorage.");
+                        $"has no storage.");
                     return;
                 }
 

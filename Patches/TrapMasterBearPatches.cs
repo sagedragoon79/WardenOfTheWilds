@@ -13,7 +13,16 @@ namespace WardenOfTheWilds.Patches
     /// fires and the interval is met), we roll a configurable chance (default
     /// 3%) that the trap "caught a bear" instead. On success, bonus meat/hide/
     /// tallow (same amounts as BGH bear kill config) are deposited directly
-    /// into the owning cabin's manufacturingStorage.
+    /// into the owning cabin's `storage` (the OUTPUT pool — same place
+    /// vanilla's ProduceItems writes butcher output).
+    ///
+    /// IMPORTANT (May 2026 fix): items go to cabin.storage, NOT
+    /// manufacturingStorage. Vanilla's CheckWorkAvailabilityForItem only
+    /// queries base.storage to register the HasItemMeat work bucket, so
+    /// items in manufacturingStorage are invisible to smokehouse pull and
+    /// wagon push logistics. The earlier (broken) version of this patch
+    /// dumped bonus into manufacturingStorage, accumulating unhauled meat
+    /// up to 1800+ units in long Trap Master saves.
     ///
     /// The small carcass still spawns normally — the bear is a bonus on top.
     /// This gives Trap Master a rare windfall that mirrors BGH's bear kill
@@ -82,13 +91,14 @@ namespace WardenOfTheWilds.Patches
                 float roll = UnityEngine.Random.value;
                 if (roll > chance) return;
 
-                // Bear trapped! Inject bonus into cabin
-                var storage = cabin.manufacturingStorage;
+                // Bear trapped! Inject bonus into cabin's OUTPUT storage
+                // (NOT manufacturingStorage — see class header for bug history).
+                var storage = cabin.storage;
                 if (storage == null)
                 {
                     MelonLogger.Warning(
                         $"[WotW] TrapMasterBear: cabin '{cabin.gameObject.name}' " +
-                        $"has no manufacturingStorage.");
+                        $"has no storage.");
                     return;
                 }
 
