@@ -49,8 +49,27 @@ namespace WardenOfTheWilds.Components
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
 
         // ── Persistence: position-keyed dictionary (survives save/load) ───────
+        // Populated from two writers:
+        //   1. In-session: the Path setter writes the player's selection.
+        //   2. On load:    HunterCabinPatches.LoadPostfix reads the path int we
+        //      appended to FF's ES2 save stream (mirrors FishingShackLoadPatches'
+        //      mode persistence) and calls SetSavedPathForPosition before the
+        //      cabin's InitializeDelayed runs RestoreSavedPath.
+        // OnMapLoaded clears the dict at scene-load start; Load patches run
+        // during deserialization and re-populate it before component init reads.
         private static readonly Dictionary<int, HunterT2Path> SavedPaths =
             new Dictionary<int, HunterT2Path>();
+
+        /// <summary>
+        /// Called from HunterCabinPatches.LoadPostfix when FF's vanilla save
+        /// stream has just yielded our appended path int. Stores the path keyed
+        /// by position so the matching cabin's RestoreSavedPath picks it up.
+        /// </summary>
+        internal static void SetSavedPathForPosition(Vector3 pos, HunterT2Path path)
+        {
+            int key = Mathf.RoundToInt(pos.x * 1000f + pos.z);
+            SavedPaths[key] = path;
+        }
 
         private int GetBuildingKey()
         {

@@ -124,6 +124,45 @@ namespace WardenOfTheWilds.Patches
             // via set_userDefinedMaxDeployedTraps() — confirmed property from method dump.
             // No separate Harmony patch needed here; the Enhancement component drives it.
             MelonLogger.Msg("[WotW] HunterCabinPatches: trap control via Enhancement property setter (OK).");
+
+            // ── Patch 4: T2 path persistence across save/reload ──────────────
+            // Mirrors FishingShackLoadPatches' RegisterSaveLoadPatches: postfix
+            // HunterBuilding.Save(ES2Writer) to append our path int and
+            // HunterBuilding.Load(ES2Reader) to read it back into SavedPaths so
+            // the cabin's RestoreSavedPath picks it up before InitializeDelayed
+            // applies the path. Without this, T2 cabins always reverted to
+            // the default (Hunting Lodge / BGH) on save/reload because the
+            // in-memory SavedPaths dict was wiped by OnMapLoaded.
+            try
+            {
+                var saveMethod = AccessTools.Method(hunterType, "Save", new[] { typeof(ES2Writer) });
+                if (saveMethod != null)
+                {
+                    harmony.Patch(saveMethod, postfix: new HarmonyMethod(
+                        typeof(HunterCabinPatches).GetMethod(nameof(SavePostfix), AllStatic)));
+                    MelonLogger.Msg($"[WotW] Patched {saveMethod.DeclaringType.Name}.Save (T2 path persistence)");
+                }
+                else
+                {
+                    MelonLogger.Warning("[WotW] HunterCabinPatches: HunterBuilding.Save(ES2Writer) not found — path persistence disabled.");
+                }
+
+                var loadMethod = AccessTools.Method(hunterType, "Load", new[] { typeof(ES2Reader) });
+                if (loadMethod != null)
+                {
+                    harmony.Patch(loadMethod, postfix: new HarmonyMethod(
+                        typeof(HunterCabinPatches).GetMethod(nameof(LoadPostfix), AllStatic)));
+                    MelonLogger.Msg($"[WotW] Patched {loadMethod.DeclaringType.Name}.Load (T2 path persistence)");
+                }
+                else
+                {
+                    MelonLogger.Warning("[WotW] HunterCabinPatches: HunterBuilding.Load(ES2Reader) not found — path persistence disabled.");
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] HunterCabinPatches: Save/Load patch register failed: {ex.Message}");
+            }
         }
 
         // ── Patch implementations ─────────────────────────────────────────────
@@ -173,6 +212,77 @@ namespace WardenOfTheWilds.Patches
             catch (Exception ex)
             {
                 MelonLogger.Warning($"[WotW] SetBuildingDataRecordNamePostfix (hunter): {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Postfix on HunterBuilding.Save(ES2Writer). Appends a single int
+        /// (the cabin's HunterCabinEnhancement.Path) to the save stream so the
+        /// matching Load postfix can restore it. Vanilla doesn't know about
+        /// the path enum, so this extends FF's save format additively. If
+        /// the cabin has no enhancement (T1) we still write Vanilla(0) to
+        /// keep the stream layout consistent across all hunter buildings.
+        /// </summary>
+        public static void SavePostfix(object __instance, ES2Writer writer)
+        {
+            try
+            {
+                if (writer == null) return;
+                var comp = __instance as Component;
+                var enh = comp?.GetComponent<HunterCabinEnhancement>();
+                int pathInt = enh != null ? (int)enh.Path : (int)HunterT2Path.Vanilla;
+                writer.Write(pathInt);
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] HunterCabinSavePostfix: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Postfix on HunterBuilding.Load(ES2Reader). Reads the path int we
+        /// appended in SavePostfix and stashes it in HunterCabinEnhancement's
+        /// SavedPaths dict keyed by world position, where the cabin's
+        /// InitializeDelayed → RestoreSavedPath will pick it up.
+        ///
+        /// Backward-compat: pre-patch saves don't have the appended int.
+        /// The reader will either throw EOF or return garbage. We catch and
+        /// validate the int falls in the known enum range; otherwise default
+        /// to Vanilla (the prior behavior). Saving the game once after
+        /// installing this patch writes proper data for the next load.
+        /// </summary>
+        public static void LoadPostfix(object __instance, ES2Reader reader)
+        {
+            try
+            {
+                if (reader == null) return;
+                var comp = __instance as Component;
+                if (comp == null) return;
+
+                int pathInt = reader.Read<int>();
+
+                if (pathInt != (int)HunterT2Path.Vanilla &&
+                    pathInt != (int)HunterT2Path.TrapperLodge &&
+                    pathInt != (int)HunterT2Path.HuntingLodge)
+                {
+                    MelonLogger.Msg(
+                        $"[WotW] HunterCabinLoadPostfix: '{comp.gameObject.name}' " +
+                        $"invalid path={pathInt} (legacy save), defaulting to Vanilla. " +
+                        "Saving this game will write proper data for next load.");
+                    return;
+                }
+
+                var path = (HunterT2Path)pathInt;
+                HunterCabinEnhancement.SetSavedPathForPosition(comp.transform.position, path);
+                MelonLogger.Msg(
+                    $"[WotW] HunterCabinLoadPostfix: '{comp.gameObject.name}' restored path={path}");
+            }
+            catch (Exception ex)
+            {
+                // Reader likely ran out of bytes (legacy save with no appended int).
+                MelonLogger.Msg(
+                    $"[WotW] HunterCabinLoadPostfix: no path int in save (legacy), " +
+                    $"defaulting to Vanilla. ({ex.GetType().Name})");
             }
         }
 
