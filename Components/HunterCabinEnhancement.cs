@@ -720,11 +720,23 @@ namespace WardenOfTheWilds.Components
         }
 
         // ── Trapper environment bonuses ───────────────────────────────────────
-        // All fields are cached at path-selection time (ApplyPath → SetTrapSpawnInterval).
-        // OnGUI reads these cached values — never calls FindObjectsOfType on the render thread.
+        // Pelt mult inputs:
+        //   • TrapperLodgePeltMult / TrapMasterSpeedMult / TrapperWaterBonus — prefs (cheap, re-read every call)
+        //   • Water tile count — expensive grid scan (~250 GetIsWater calls @ radius 60).
+        //     Only changes on relocate or terrain edit — cache and skip when stable.
+        //
+        // Caching invariant: water-tile count is valid for (position, radius).
+        // Vanilla's UpdateTrappingPoints postfix can fire many times per day-tick
+        // across all lodges; previously each invocation re-scanned the terrain,
+        // producing a visible freeze on maps with many hunter buildings.
         private bool  _trapperNearWater = false;
         private int   _cachedWaterTiles = 0;
         private float _cachedPeltMult   = 1.0f;
+        private bool    _waterTilesScanned = false;
+        private Vector3 _scannedAtPos      = Vector3.zero;
+        private float   _scannedAtRadius   = 0f;
+        private float   _lastLoggedMult    = float.NaN;
+        private bool    _lastLoggedNearWater = false;
 
         /// <summary>
         /// Calculates the effective interval multiplier for TrapperLodge.
@@ -738,10 +750,18 @@ namespace WardenOfTheWilds.Components
             // Trap Master speed boost — traps tick faster baseline
             mult *= WardenOfTheWildsMod.TrapMasterSpeedMult.Value;
 
-            // Water tile counting — threshold-gated bonus
-            _cachedWaterTiles = CountWaterTiles(
-                transform.position,
-                GetHuntingRadius());
+            // Water tile counting — only re-scan if position or radius changed.
+            // Position change covers relocate; radius change covers path switch.
+            float radius = GetHuntingRadius();
+            if (!_waterTilesScanned ||
+                (transform.position - _scannedAtPos).sqrMagnitude > 0.25f ||
+                Mathf.Abs(radius - _scannedAtRadius) > 0.5f)
+            {
+                _cachedWaterTiles = CountWaterTiles(transform.position, radius);
+                _scannedAtPos = transform.position;
+                _scannedAtRadius = radius;
+                _waterTilesScanned = true;
+            }
 
             _trapperNearWater = _cachedWaterTiles >=
                 WardenOfTheWildsMod.TrapperWaterTileThreshold.Value;
@@ -751,14 +771,34 @@ namespace WardenOfTheWilds.Components
 
             _cachedPeltMult = mult; // Cache for OnGUI — never recompute on the render thread
 
-            WardenOfTheWildsMod.Log.Msg(
-                $"[WotW] Trapper '{gameObject.name}' effective mult: {mult:F2} " +
-                $"(pelt={WardenOfTheWildsMod.TrapperLodgePeltMult.Value:F1}, " +
-                $"speed={WardenOfTheWildsMod.TrapMasterSpeedMult.Value:F2}, " +
-                $"waterTiles={_cachedWaterTiles}/{WardenOfTheWildsMod.TrapperWaterTileThreshold.Value}, " +
-                $"waterBonus={_trapperNearWater})");
+            // Log only on actual change — vanilla's UpdateTrappingPoints postfix
+            // calls this frequently across every Trapper lodge.
+            if (float.IsNaN(_lastLoggedMult)
+                || Mathf.Abs(mult - _lastLoggedMult) > 0.01f
+                || _trapperNearWater != _lastLoggedNearWater)
+            {
+                WardenOfTheWildsMod.Log.Msg(
+                    $"[WotW] Trapper '{gameObject.name}' effective mult: {mult:F2} " +
+                    $"(pelt={WardenOfTheWildsMod.TrapperLodgePeltMult.Value:F1}, " +
+                    $"speed={WardenOfTheWildsMod.TrapMasterSpeedMult.Value:F2}, " +
+                    $"waterTiles={_cachedWaterTiles}/{WardenOfTheWildsMod.TrapperWaterTileThreshold.Value}, " +
+                    $"waterBonus={_trapperNearWater})");
+                _lastLoggedMult = mult;
+                _lastLoggedNearWater = _trapperNearWater;
+            }
 
             return mult;
+        }
+
+        /// <summary>
+        /// Forces the water-tile cache to recompute on next CalculateTrapperPeltMult.
+        /// Call from external systems that mutate the terrain inside this lodge's
+        /// hunting radius (e.g. river carving, terrain editor) to keep the bonus
+        /// gate accurate without waiting for a relocate or path switch.
+        /// </summary>
+        public void InvalidateWaterTileCache()
+        {
+            _waterTilesScanned = false;
         }
 
         /// <summary>
@@ -782,7 +822,8 @@ namespace WardenOfTheWilds.Components
         /// <summary>
         /// Counts water tiles within a radius by sampling the terrain on a grid.
         /// Uses TerrainManagerBase.GetIsWater(Vector2, width, height, gridSize, out bool).
-        /// Runs once at path-selection time — terrain doesn't change mid-game.
+        /// Hot — caller must cache the result. CalculateTrapperPeltMult only invokes
+        /// this when the lodge moves or its hunting radius changes.
         /// </summary>
         private static int CountWaterTiles(Vector3 center, float radius)
         {

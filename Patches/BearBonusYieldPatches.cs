@@ -99,21 +99,16 @@ namespace WardenOfTheWilds.Patches
                     return;
                 }
 
-                uint addedMeat   = 0u;
-                uint addedPelt   = 0u;
-                uint addedTallow = 0u;
+                // Clamp deposits to the configured per-item cap (same pref that
+                // governs vanilla butcher halt). See TrapMasterBearChancePatch.DepositClamped
+                // for the rationale — vanilla AddItems writes past the per-item
+                // soft cap as long as total bldg capacity has room, so we have
+                // to enforce the cap ourselves here.
+                int cap = WardenOfTheWildsMod.HunterCabinOutputStorageCap.Value;
 
-                if (bonusMeat > 0 && wbm.itemMeat != null)
-                    addedMeat = storage.AddItems(
-                        new ItemBundle(wbm.itemMeat, (uint)bonusMeat, 100u));
-
-                if (bonusPelt > 0 && wbm.itemHide != null)
-                    addedPelt = storage.AddItems(
-                        new ItemBundle(wbm.itemHide, (uint)bonusPelt, 100u));
-
-                if (bonusTallow > 0 && wbm.itemTallow != null)
-                    addedTallow = storage.AddItems(
-                        new ItemBundle(wbm.itemTallow, (uint)bonusTallow, 100u));
+                uint addedMeat   = TrapMasterBearChancePatch.DepositClamped(storage, wbm.itemMeat,   bonusMeat,   cap);
+                uint addedPelt   = TrapMasterBearChancePatch.DepositClamped(storage, wbm.itemHide,   bonusPelt,   cap);
+                uint addedTallow = TrapMasterBearChancePatch.DepositClamped(storage, wbm.itemTallow, bonusTallow, cap);
 
                 MelonLogger.Msg(
                     $"[WotW] BearBonusYield: '{hunter.gameObject.name}' (BGH) involved in bear kill " +
@@ -122,13 +117,15 @@ namespace WardenOfTheWilds.Patches
                     $"+{addedPelt} hide, +{addedTallow} tallow " +
                     $"(requested {bonusMeat}/{bonusPelt}/{bonusTallow}).");
 
-                if (addedMeat < (uint)bonusMeat ||
-                    addedPelt < (uint)bonusPelt ||
-                    addedTallow < (uint)bonusTallow)
+                int droppedMeat   = bonusMeat   - (int)addedMeat;
+                int droppedPelt   = bonusPelt   - (int)addedPelt;
+                int droppedTallow = bonusTallow - (int)addedTallow;
+                if (droppedMeat > 0 || droppedPelt > 0 || droppedTallow > 0)
                 {
                     MelonLogger.Warning(
-                        $"[WotW] BearBonusYield: cabin '{cabin.gameObject.name}' " +
-                        $"over capacity — some bonus items were dropped. " +
+                        $"[WotW] BearBonusYield: cabin '{cabin.gameObject.name}' at cap " +
+                        $"(HunterCabinOutputStorageCap={cap}) — forfeit " +
+                        $"{droppedMeat} meat, {droppedPelt} hide, {droppedTallow} tallow. " +
                         $"Consider building a Smokehouse or adding stockpiles.");
                 }
             }

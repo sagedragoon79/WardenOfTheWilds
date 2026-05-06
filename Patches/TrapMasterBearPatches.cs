@@ -106,40 +106,63 @@ namespace WardenOfTheWilds.Patches
                 int bonusPelt   = WardenOfTheWildsMod.BGHBearBonusPelt.Value;
                 int bonusTallow = WardenOfTheWildsMod.BGHBearBonusTallow.Value;
 
-                uint addedMeat   = 0u;
-                uint addedPelt   = 0u;
-                uint addedTallow = 0u;
+                // Clamp deposits to the configured per-item cap (same pref that
+                // governs vanilla butcher halt). storage.AddItems writes past
+                // the per-item cap if total bldg capacity has room — without
+                // this clamp, bear bonuses pile up indefinitely on lodges that
+                // out-produce wagon haul rate, producing the well-known
+                // "X/200 stack" symptom.
+                int cap = WardenOfTheWildsMod.HunterCabinOutputStorageCap.Value;
 
-                if (bonusMeat > 0 && wbm.itemMeat != null)
-                    addedMeat = storage.AddItems(
-                        new ItemBundle(wbm.itemMeat, (uint)bonusMeat, 100u));
-
-                if (bonusPelt > 0 && wbm.itemHide != null)
-                    addedPelt = storage.AddItems(
-                        new ItemBundle(wbm.itemHide, (uint)bonusPelt, 100u));
-
-                if (bonusTallow > 0 && wbm.itemTallow != null)
-                    addedTallow = storage.AddItems(
-                        new ItemBundle(wbm.itemTallow, (uint)bonusTallow, 100u));
+                uint addedMeat   = DepositClamped(storage, wbm.itemMeat,   bonusMeat,   cap);
+                uint addedPelt   = DepositClamped(storage, wbm.itemHide,   bonusPelt,   cap);
+                uint addedTallow = DepositClamped(storage, wbm.itemTallow, bonusTallow, cap);
 
                 MelonLogger.Msg(
                     $"[WotW] BEAR TRAP! Trap Master '{cabin.gameObject.name}' caught a bear! " +
                     $"+{addedMeat} meat, +{addedPelt} hide, +{addedTallow} tallow " +
                     $"(roll {roll:F3} < {chance:F3}).");
 
-                if (addedMeat < (uint)bonusMeat ||
-                    addedPelt < (uint)bonusPelt ||
-                    addedTallow < (uint)bonusTallow)
+                int droppedMeat   = bonusMeat   - (int)addedMeat;
+                int droppedPelt   = bonusPelt   - (int)addedPelt;
+                int droppedTallow = bonusTallow - (int)addedTallow;
+                if (droppedMeat > 0 || droppedPelt > 0 || droppedTallow > 0)
                 {
                     MelonLogger.Warning(
-                        $"[WotW] TrapMasterBear: cabin '{cabin.gameObject.name}' " +
-                        $"over capacity — some bear bonus items were dropped.");
+                        $"[WotW] TrapMasterBear: cabin '{cabin.gameObject.name}' at cap " +
+                        $"(HunterCabinOutputStorageCap={cap}) — forfeit " +
+                        $"{droppedMeat} meat, {droppedPelt} hide, {droppedTallow} tallow.");
                 }
             }
             catch (Exception ex)
             {
                 MelonLogger.Warning($"[WotW] TrapMasterBearChancePatch: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Deposits up to <paramref name="desired"/> of <paramref name="item"/> into
+        /// <paramref name="storage"/>, clamped so the resulting per-item count does
+        /// not exceed <paramref name="cap"/>. Returns the actual amount added
+        /// (computed from before/after counts — vanilla AddItems' return value
+        /// reports the new total, not the delta, which is why prior versions of
+        /// this patch logged misleading "+N" numbers).
+        /// </summary>
+        internal static uint DepositClamped(ReservableItemStorage storage, Item item, int desired, int cap)
+        {
+            if (storage == null || item == null || desired <= 0) return 0u;
+
+            uint current = storage.GetItemCount(item);
+            if (current >= (uint)cap) return 0u;
+
+            uint room = (uint)cap - current;
+            uint deposit = (uint)Math.Min(desired, (int)room);
+            if (deposit == 0u) return 0u;
+
+            uint before = current;
+            storage.AddItems(new ItemBundle(item, deposit, 100u));
+            uint after = storage.GetItemCount(item);
+            return after >= before ? after - before : 0u;
         }
     }
 }

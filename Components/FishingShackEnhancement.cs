@@ -87,8 +87,33 @@ namespace WardenOfTheWilds.Components
         // Cached storage reference for Creeler production
         private object _fishStorage = null;
         private MethodInfo _addItemsMethod = null;
+        private MethodInfo _getItemCountMethod = null;
         private object _itemFishRef = null;
         private bool _storageLookupDone = false;
+
+        /// <summary>
+        /// Reads the current fish count from <see cref="_fishStorage"/> via
+        /// reflection. Used to compute (a) available room before depositing
+        /// (cap clamp) and (b) the actual delta added (vanilla AddItems
+        /// returns the new total, not the delta — we compute it from
+        /// before/after counts). Returns 0 on any reflection failure.
+        /// </summary>
+        private uint GetFishCount()
+        {
+            try
+            {
+                if (_fishStorage == null || _itemFishRef == null) return 0u;
+                if (_getItemCountMethod == null)
+                {
+                    _getItemCountMethod = _fishStorage.GetType().GetMethod(
+                        "GetItemCount", new[] { _itemFishRef.GetType() });
+                }
+                if (_getItemCountMethod == null) return 0u;
+                object result = _getItemCountMethod.Invoke(_fishStorage, new[] { _itemFishRef });
+                return result is uint u ? u : 0u;
+            }
+            catch { return 0u; }
+        }
 
         // Selection tracking
         private bool _lastSelected = false;
@@ -973,7 +998,13 @@ namespace WardenOfTheWilds.Components
                 if (_daysSinceLastCrabSpawn >= interval)
                 {
                     _daysSinceLastCrabSpawn = 0;
-                    ProduceCrabTrapFish();
+                    // Defer the deposit by a per-shack random offset so multiple
+                    // shacks firing on the same game-day boundary don't pile their
+                    // AddItems cascades (work-bucket re-eval + wagon notifications)
+                    // onto the same frame. With 1 shack this just shifts the spike
+                    // off the day-tick frame; at 12+ shacks it spreads the cascades
+                    // across ~30 frames so no single frame is overloaded.
+                    Invoke(nameof(ProduceCrabTrapFish), UnityEngine.Random.Range(0f, 0.5f));
                 }
             }
         }
@@ -1014,10 +1045,30 @@ namespace WardenOfTheWilds.Components
                     return;
                 }
 
-                // Create ItemBundle and add to storage
-                var bundle = new ItemBundle((Item)_itemFishRef, (uint)totalFish, 100u);
-                object result = _addItemsMethod.Invoke(_fishStorage, new object[] { bundle });
-                uint added = result is uint u ? u : 0u;
+                // Clamp deposit to FishingShackStorageCap. Vanilla AddItems on the
+                // shack's storage writes past the per-item cap as long as total
+                // bldg capacity has room — without this clamp, a shack whose fish
+                // never gets hauled would silently accumulate fish forever (same
+                // failure mode as the Trap Master bear bonus on hunter lodges).
+                // Mirrors TrapMasterBearChancePatch.DepositClamped, but resolves
+                // GetItemCount via reflection since _fishStorage is typed as object.
+                int cap = WardenOfTheWildsMod.FishingShackStorageCap.Value;
+                uint current = GetFishCount();
+                uint deposit = 0u;
+                if ((uint)totalFish > 0u && current < (uint)cap)
+                {
+                    uint room = (uint)cap - current;
+                    deposit = (uint)Math.Min(totalFish, (int)room);
+                }
+
+                uint added = 0u;
+                if (deposit > 0u)
+                {
+                    var bundle = new ItemBundle((Item)_itemFishRef, deposit, 100u);
+                    _addItemsMethod.Invoke(_fishStorage, new object[] { bundle });
+                    uint after = GetFishCount();
+                    added = after >= current ? after - current : 0u;
+                }
 
                 WardenOfTheWildsMod.Log.Msg(
                     $"[WotW] CrabTrap '{gameObject.name}': +{added}/{totalFish} fish " +
@@ -1025,18 +1076,27 @@ namespace WardenOfTheWilds.Components
                     $"interval={GetCrabSpawnInterval()}d" +
                     $"{(_waterBonusActive ? " [water bonus]" : "")})");
 
-                if (added < (uint)totalFish)
+                int dropped = totalFish - (int)added;
+                if (dropped > 0)
                 {
                     WardenOfTheWildsMod.Log.Warning(
-                        $"[WotW] CrabTrap '{gameObject.name}': storage full — " +
-                        $"only {added} of {totalFish} fish deposited.");
+                        $"[WotW] CrabTrap '{gameObject.name}' at cap " +
+                        $"(FishingShackStorageCap={cap}) — forfeit {dropped} of {totalFish} fish.");
                 }
 
-                // Force work-availability re-eval so wagons notice the new fish
-                // immediately rather than on the next tick. Without this, Creeler
-                // output can sit uncollected in the shack for up to a game-day.
-                if (added > 0u)
-                    TriggerWorkAvailabilityCheck();
+                // Wake-up call removed (2026-05-05). Was: TriggerWorkAvailabilityCheck()
+                // here forced vanilla's work-bucket re-eval so wagons would notice the
+                // new fish "immediately" rather than waiting for vanilla's next poll.
+                //
+                // Two existing safeguards already cover that gap:
+                //   • Vanilla runs CheckWorkAvailability on storage events + day-tick.
+                //   • Manifest Delivery's wagon AI continuously scans for haul targets
+                //     (~500-1500ms cycle) and picks up fresh fish without prompting.
+                //
+                // The cascade through vanilla → MD's CampHaul scan was producing a
+                // visible day-boundary freeze on every Creeler tick. Letting natural
+                // polling do the work is both faster (no synchronous cascade) and
+                // simpler (no reflection-driven nudge to maintain).
             }
             catch (Exception ex)
             {
@@ -1045,24 +1105,10 @@ namespace WardenOfTheWilds.Components
             }
         }
 
-        /// <summary>
-        /// Pokes the shack's CheckWorkAvailability so logistics notice that the
-        /// shack just gained fish and dispatch a wagon. Without this, the newly-
-        /// deposited Creeler fish sit in storage until vanilla's next work-bucket
-        /// re-eval, which can lag by up to a game-day.
-        /// </summary>
-        private void TriggerWorkAvailabilityCheck()
-        {
-            try
-            {
-                var shack = GetComponent<Building>();
-                if (shack == null) return;
-                var method = shack.GetType().GetMethod("CheckWorkAvailability",
-                    AllInstance, null, Type.EmptyTypes, null);
-                method?.Invoke(shack, null);
-            }
-            catch { }
-        }
+        // TriggerWorkAvailabilityCheck() removed 2026-05-05. See ProduceCrabTrapFish
+        // for the rationale — vanilla and Manifest Delivery already poll work
+        // availability frequently enough that an explicit nudge is redundant, and
+        // the synchronous cascade was the source of a day-boundary freeze.
 
         /// <summary>
         /// Discovers fish storage and ItemFish reference via reflection.
