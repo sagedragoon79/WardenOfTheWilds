@@ -569,6 +569,13 @@ namespace WardenOfTheWilds.Components
             // smokehouse needs time to actually request raw materials; the
             // first 5 ticks captured an idle-on-stock state. Now we wait
             // long enough to catch cachedSourceItems populated.
+
+            // v1.0.11 — Per-smokehouse random initial offset to spread diag
+            // ticks evenly across the 5s cadence so multiple smokehouses
+            // don't all log + run reflection-heavy diagnostics on the same
+            // frame.
+            yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 5f));
+
             var wait = new WaitForSeconds(5f);
             while (this != null && gameObject != null)
             {

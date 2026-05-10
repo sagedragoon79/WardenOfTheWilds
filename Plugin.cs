@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.9", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.11", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -869,6 +869,12 @@ namespace WardenOfTheWilds
             // class names are resolved at runtime via Assembly.GetType() scanning.
             HarmonyInstance.PatchAll();
 
+            // v1.0.11 — Event-driven enhancement attach. Replaces the
+            // perpetual LateInit Phase 2 polling loop that produced the
+            // 60s scaled-time stutter. See BuildingAttachPatches header
+            // for full context.
+            BuildingAttachPatches.Apply(HarmonyInstance);
+
             HunterCabinPatches.ApplyPatches(HarmonyInstance);
             HunterCombatPatches.ApplyPatches(HarmonyInstance);
             HunterEquipmentGatePatches.Apply(HarmonyInstance);
@@ -897,7 +903,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.9 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.11 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");
@@ -989,60 +995,53 @@ namespace WardenOfTheWilds
                 $"{MaxAttempts}s — spawn tuning skipped.");
         }
 
-        // ── LateInit: a two-phase init/refresh loop for component attachment ─
+        // ── LateInit: one-shot catch-up sweep (v1.0.11) ────────────────────
         //
-        // Background: heavy saves can take >55s for all hunter / fishing / smoke
-        // buildings to spawn into the scene after a load. With the previous
-        // 15×3s = 45s polling window (post a 10s wait), some users had to
-        // reload 2-3 times before specs would surface (Smokey, May 2026).
+        // History:
+        //   v1.0.0–v1.0.9: two-phase polling loop. Phase 1 ran 30 × 3s,
+        //                  Phase 2 ran every 30s forever. The Phase 2
+        //                  scaled-time tick produced a visible 30s/15s
+        //                  stutter at 1x/2x speed.
+        //   v1.0.11:       Phase 2 → realtime 60s + Type cache. Reduced
+        //                  but still a perceptible 60s tick on busy
+        //                  late-game scenes (FindObjectsOfType across
+        //                  thousands of MonoBehaviours, three times).
+        //   v1.0.11:       Replaced with event-driven attach via Harmony
+        //                  postfix on Building.Awake (see
+        //                  BuildingAttachPatches). LateInit now runs
+        //                  exactly once after a brief delay, just to
+        //                  cover any building that may have woken up
+        //                  before our patch was wired (in practice this
+        //                  shouldn't happen since the patch is applied
+        //                  in OnInitializeMelon, before any scene loads,
+        //                  but the catch-up is cheap insurance).
         //
-        // New strategy:
-        //   PHASE 1 — fast attach: 5s initial wait, then 30 attempts × 3s
-        //             = 95s of dense polling. Captures most save loads on
-        //             reasonable hardware.
-        //   PHASE 2 — slow refresh: every 30s forever, re-run TryAttachComponents.
-        //             This handles (a) extreme load times where Phase 1 missed,
-        //             and (b) buildings the player constructs mid-session
-        //             (TryAttachComponents skips already-attached buildings via
-        //             the GetComponent<X>() == null guard, so re-running is safe
-        //             and cheap).
+        // After this single sweep, no further polling occurs for the
+        // rest of the session. All future building attachment is driven
+        // by the Awake postfix in BuildingAttachPatches.
         private IEnumerator LateInit()
         {
-            yield return new WaitForSeconds(5f);
+            // Wait long enough for the save scene to finish loading and
+            // most/all GameObjects to have run their Awake passes.
+            yield return new WaitForSecondsRealtime(8f);
 
-            // Phase 1: dense polling
-            int attempts = 0;
-            const int Phase1Attempts = 30;  // 30 × 3s = 90s
-            while (attempts < Phase1Attempts)
+            try
             {
-                attempts++;
-                if (TryAttachComponents())
+                bool anyAttached = TryAttachComponents();
+                if (!anyAttached)
                 {
-                    Log.Msg($"[WotW] Components attached after {attempts} attempt(s).");
-                    break;
+                    // Not necessarily an error: if the save has no
+                    // hunter / fishing / smoke buildings yet, this is
+                    // the expected outcome. Future buildings the player
+                    // constructs will be caught by the Awake postfix.
+                    Log.Msg(
+                        "[WotW] LateInit catch-up sweep found no buildings; " +
+                        "future construction will attach via Building.Awake patch.");
                 }
-                yield return new WaitForSeconds(3f);
             }
-
-            if (attempts >= Phase1Attempts)
+            catch (Exception ex)
             {
-                Log.Warning(
-                    "[WotW] LateInit Phase 1 didn't catch any buildings in 95s — " +
-                    "switching to Phase 2 slow refresh. New buildings constructed " +
-                    "mid-session will still get specialization UI.");
-            }
-
-            // Phase 2: low-frequency refresh forever (safe — already-attached
-            // buildings are skipped by the null-component guard inside).
-            var slowWait = new WaitForSeconds(30f);
-            while (true)
-            {
-                yield return slowWait;
-                try { TryAttachComponents(); }
-                catch (Exception ex)
-                {
-                    Log.Warning($"[WotW] LateInit Phase 2: {ex.Message}");
-                }
+                Log.Warning($"[WotW] LateInit catch-up sweep: {ex.Message}");
             }
         }
 
@@ -1200,40 +1199,75 @@ namespace WardenOfTheWilds
             catch { }
         }
 
-        private bool TryAttachComponents()
+        // v1.0.11 — Type resolution cache. Previously TryAttachComponents
+        // walked AppDomain.CurrentDomain.GetAssemblies() on EVERY call —
+        // 100+ assemblies in a modded build, each with 3 GetType lookups.
+        // Combined with the 30s scaled-time Phase 2 loop, this was the
+        // dominant source of mid-game stutter (visible every ~30s at 1x,
+        // ~15s at 2x). Once we've found each type we cache it forever —
+        // the assemblies don't change at runtime.
+        private static Type? _cachedHunterType;
+        private static Type? _cachedFishType;
+        private static Type? _cachedSmokeType;
+        private static bool  _typeResolutionDone;
+
+        private static void EnsureTypesResolved()
         {
-            // DEFENSIVE: previous implementation iterated every loaded
-            // assembly without try/catch. A single ill-behaved assembly
-            // (e.g. dynamic / Reflection.Emit one) throwing on `asm.GetType`
-            // killed the entire loop silently — neither the success log
-            // nor the failure log ever fired, leaving us with the
-            // "every enhancement silently never attaches" symptom.
-            //
-            // We now isolate three risks:
-            //   1. Per-assembly type lookup (try/catch around each asm)
-            //   2. Per-section AddComponent (try/catch around each block)
-            //   3. The whole function itself (one outer try/catch)
-            // and log anything unexpected so silent failures become visible.
-            bool foundAny = false;
-            int hunterAdded = 0, fishAdded = 0, smokeAdded = 0;
+            if (_typeResolutionDone) return;
 
             try
             {
                 foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
                 {
-                    Type? hunterType = null, fishType = null, smokeType = null;
                     try
                     {
-                        hunterType = asm.GetType("HunterBuilding") ?? asm.GetType("HunterCabin");
-                        fishType   = asm.GetType("FishingShack")   ?? asm.GetType("FishermanShack");
-                        smokeType  = asm.GetType("SmokeHouse")     ?? asm.GetType("Smokehouse");
+                        if (_cachedHunterType == null)
+                            _cachedHunterType = asm.GetType("HunterBuilding") ?? asm.GetType("HunterCabin");
+                        if (_cachedFishType == null)
+                            _cachedFishType = asm.GetType("FishingShack") ?? asm.GetType("FishermanShack");
+                        if (_cachedSmokeType == null)
+                            _cachedSmokeType = asm.GetType("SmokeHouse") ?? asm.GetType("Smokehouse");
                     }
                     catch (Exception ex)
                     {
                         Log.Warning(
-                            $"[WotW] TryAttachComponents: GetType threw on '{asm.GetName().Name}': {ex.Message}");
-                        continue;
+                            $"[WotW] EnsureTypesResolved: GetType threw on '{asm.GetName().Name}': {ex.Message}");
                     }
+
+                    if (_cachedHunterType != null && _cachedFishType != null && _cachedSmokeType != null)
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"[WotW] EnsureTypesResolved OUTER: {ex.Message}");
+            }
+
+            // Mark done once all three are resolved (or we've made a best
+            // effort). If any are still null we've already walked the
+            // domain so re-walking won't help — vanilla Assembly-CSharp
+            // is loaded long before LateInit fires.
+            _typeResolutionDone = true;
+        }
+
+        private bool TryAttachComponents()
+        {
+            // DEFENSIVE: previous implementation iterated every loaded
+            // assembly without try/catch on every call. v1.0.11 caches
+            // the resolved Types so steady-state polls do zero
+            // assembly-walk work — only the FindObjectsOfType scans
+            // (gated by feature flags) remain.
+            bool foundAny = false;
+            int hunterAdded = 0, fishAdded = 0, smokeAdded = 0;
+
+            EnsureTypesResolved();
+
+            try
+            {
+                {
+                    Type? hunterType = _cachedHunterType;
+                    Type? fishType   = _cachedFishType;
+                    Type? smokeType  = _cachedSmokeType;
 
                     if (hunterType != null && HunterOverhaulEnabled.Value)
                     {

@@ -1565,6 +1565,15 @@ namespace WardenOfTheWilds.Components
             var itemBoarCarc    = wbm.itemBoarCarcass;
             var itemWolfCarc    = wbm.itemWolfCarcass;
 
+            // v1.0.11 — Per-cabin random initial offset.
+            //   Without this, every cabin attached during the same Building.Awake
+            //   pass (e.g. all cabins on a save load) ticks its diagnostic dump
+            //   on the same frame every 30s, producing a visible log spike + a
+            //   small frame hitch from N storage queries + N MelonLogger writes.
+            //   The offset spreads cabins evenly across the 30s window — same
+            //   pattern used for ProduceCrabTrapFish in FishingShackEnhancement.
+            yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 30f));
+
             var wait = new WaitForSeconds(30f);
             while (this != null && gameObject != null)
             {
