@@ -130,6 +130,12 @@ namespace WardenOfTheWilds.Components
         private static AnimalTrapResource _cachedTrapPrefab = null;
         private static bool _trapPrefabLookupDone = false;
 
+        // v1.0.12 — Per-instance guard against scheduling multiple retry
+        // coroutines if SyncCreelerTraps is called repeatedly while the
+        // prefab is still unresolved (e.g. mode-cycle spam during the first
+        // few seconds of a save load).
+        private bool _creelerRetryScheduled = false;
+
         // -- Public accessors -----------------------------------------------
         public FishingShackMode Mode => _mode;
 
@@ -337,9 +343,23 @@ namespace WardenOfTheWilds.Components
             var prefab = GetCreelerTrapPrefab();
             if (prefab == null)
             {
-                WardenOfTheWildsMod.Log.Warning(
+                // v1.0.12 — Event-driven attach (v1.0.11) can race the prefab
+                // lookup: the FishingShack's Building.Awake may fire before
+                // any HunterBuilding has spawned, so FindObjectsOfType<HunterBuilding>
+                // returns empty and the prefab cache stays null. Pre-v1.0.11
+                // we attached via LateInit polling so HunterBuildings always
+                // existed by then. Schedule a retry coroutine that polls until
+                // any HunterBuilding shows up, then re-runs SyncCreelerTraps.
+                // Idempotent: if user toggles mode while waiting, the retry
+                // re-checks _mode at fire time and bails cleanly.
+                if (!_creelerRetryScheduled)
+                {
+                    _creelerRetryScheduled = true;
+                    StartCoroutine(RetrySyncCreelerTrapsWhenReady());
+                }
+                WardenOfTheWildsMod.Log.Msg(
                     $"[WotW] SyncCreelerTraps '{gameObject.name}': trap prefab not resolved " +
-                    $"(need any HunterBuilding to exist first).");
+                    $"yet — retry coroutine scheduled.");
                 return;
             }
 
@@ -403,6 +423,50 @@ namespace WardenOfTheWilds.Components
                 $"total {_deployedTraps.Count}/{target}.");
         }
 
+        /// <summary>
+        /// v1.0.12 retry coroutine. Polls every 2 seconds until a
+        /// HunterBuilding exists in the scene (so GetCreelerTrapPrefab can
+        /// succeed), then re-runs SyncCreelerTraps. Exits if mode changes
+        /// away from Creeler before the prefab resolves. Hard cap of 30
+        /// attempts (~60s) so a save with literally zero hunter cabins
+        /// doesn't spin forever.
+        /// </summary>
+        private IEnumerator RetrySyncCreelerTrapsWhenReady()
+        {
+            var wait = new WaitForSeconds(2f);
+            const int MaxAttempts = 30;
+
+            for (int i = 0; i < MaxAttempts; i++)
+            {
+                yield return wait;
+
+                // Bail cleanly if mode changed or component was destroyed.
+                if (this == null || gameObject == null) yield break;
+                if (_mode != FishingShackMode.Creeler)
+                {
+                    _creelerRetryScheduled = false;
+                    yield break;
+                }
+
+                if (GetCreelerTrapPrefab() != null)
+                {
+                    WardenOfTheWildsMod.Log.Msg(
+                        $"[WotW] RetrySyncCreelerTrapsWhenReady '{gameObject.name}': " +
+                        $"HunterBuilding found on attempt {i + 1} — deploying traps.");
+                    _creelerRetryScheduled = false;
+                    SyncCreelerTraps();
+                    yield break;
+                }
+            }
+
+            WardenOfTheWildsMod.Log.Warning(
+                $"[WotW] RetrySyncCreelerTrapsWhenReady '{gameObject.name}': " +
+                $"no HunterBuilding found after {MaxAttempts} attempts — " +
+                $"traps will not deploy. (Build a Hunter Cabin and toggle " +
+                $"the shack's mode to retry.)");
+            _creelerRetryScheduled = false;
+        }
+
         private void TeardownCreelerTraps()
         {
             int destroyed = 0;
@@ -426,20 +490,85 @@ namespace WardenOfTheWilds.Components
         /// <summary>
         /// Returns the AnimalTrapResource prefab used by hunter buildings —
         /// same prefab the hunter deploys, so we get the identical pin-frame
-        /// visual. Cached statically; lazy-resolved because HunterBuildings may
-        /// not exist at Start time.
+        /// visual. Cached statically across the session.
+        ///
+        /// v1.0.12 — Resolution strategy upgraded to three tiers so we no
+        /// longer depend on a HunterBuilding existing first (which broke
+        /// after v1.0.11's event-driven attach order):
+        ///
+        ///   Tier 1: Resources.FindObjectsOfTypeAll&lt;AnimalTrapResource&gt;
+        ///           filtered to prefab assets (scene.IsValid() == false).
+        ///           Works from the moment the game loads the prefab into
+        ///           memory — does NOT require any building to be in the
+        ///           scene yet. This is the normal path on FF 1.1.0.
+        ///
+        ///   Tier 2: FindObjectsOfType&lt;AnimalTrapResource&gt; — picks up
+        ///           any already-instanced trap in the world. We clone its
+        ///           reference type as the prefab. Less ideal because
+        ///           instances may carry per-trap state, but harmless when
+        ///           we only read the prefab graph for Instantiate.
+        ///
+        ///   Tier 3: Original HunterBuilding.activeAnimalTrapPrefab path,
+        ///           kept as a last resort in case the trap prefab uses
+        ///           an unexpected hideFlags setup or Resources doesn't
+        ///           surface it on some game version.
         /// </summary>
         private static AnimalTrapResource GetCreelerTrapPrefab()
         {
             if (_trapPrefabLookupDone) return _cachedTrapPrefab;
             try
             {
+                // Tier 1 — Resources.FindObjectsOfTypeAll returns loaded
+                // prefab assets in addition to scene instances. Prefabs
+                // have no scene assigned, so scene.IsValid() == false is
+                // the canonical filter.
+                var all = Resources.FindObjectsOfTypeAll<AnimalTrapResource>();
+                foreach (var trap in all)
+                {
+                    if (trap == null) continue;
+                    var go = trap.gameObject;
+                    if (go == null) continue;
+                    if (go.scene.IsValid()) continue;     // skip scene instances
+                    if (go.hideFlags == HideFlags.NotEditable
+                        || go.hideFlags == HideFlags.HideAndDontSave)
+                    {
+                        // Unity sometimes flags internal/system objects we
+                        // don't want to clone — skip them but keep looking.
+                        continue;
+                    }
+
+                    _cachedTrapPrefab = trap;
+                    _trapPrefabLookupDone = true;
+                    WardenOfTheWildsMod.Log.Msg(
+                        $"[WotW] GetCreelerTrapPrefab: resolved via Resources " +
+                        $"(prefab='{go.name}').");
+                    return _cachedTrapPrefab;
+                }
+
+                // Tier 2 — fall back to any in-scene trap instance.
+                foreach (var trap in all)
+                {
+                    if (trap != null)
+                    {
+                        _cachedTrapPrefab = trap;
+                        _trapPrefabLookupDone = true;
+                        WardenOfTheWildsMod.Log.Msg(
+                            $"[WotW] GetCreelerTrapPrefab: resolved via Resources " +
+                            $"(in-scene instance, prefab unavailable).");
+                        return _cachedTrapPrefab;
+                    }
+                }
+
+                // Tier 3 — legacy path via HunterBuilding (pre-v1.0.12).
                 foreach (var hb in UnityEngine.Object.FindObjectsOfType<HunterBuilding>())
                 {
                     if (hb != null && hb.activeAnimalTrapPrefab != null)
                     {
                         _cachedTrapPrefab = hb.activeAnimalTrapPrefab;
                         _trapPrefabLookupDone = true;
+                        WardenOfTheWildsMod.Log.Msg(
+                            $"[WotW] GetCreelerTrapPrefab: resolved via HunterBuilding " +
+                            $"(legacy path).");
                         return _cachedTrapPrefab;
                     }
                 }

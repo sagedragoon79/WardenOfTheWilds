@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.11", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.12", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -869,7 +869,7 @@ namespace WardenOfTheWilds
             // class names are resolved at runtime via Assembly.GetType() scanning.
             HarmonyInstance.PatchAll();
 
-            // v1.0.11 — Event-driven enhancement attach. Replaces the
+            // v1.0.12 — Event-driven enhancement attach. Replaces the
             // perpetual LateInit Phase 2 polling loop that produced the
             // 60s scaled-time stutter. See BuildingAttachPatches header
             // for full context.
@@ -903,7 +903,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.11 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.12 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");
@@ -995,18 +995,18 @@ namespace WardenOfTheWilds
                 $"{MaxAttempts}s — spawn tuning skipped.");
         }
 
-        // ── LateInit: one-shot catch-up sweep (v1.0.11) ────────────────────
+        // ── LateInit: one-shot catch-up sweep (v1.0.12) ────────────────────
         //
         // History:
         //   v1.0.0–v1.0.9: two-phase polling loop. Phase 1 ran 30 × 3s,
         //                  Phase 2 ran every 30s forever. The Phase 2
         //                  scaled-time tick produced a visible 30s/15s
         //                  stutter at 1x/2x speed.
-        //   v1.0.11:       Phase 2 → realtime 60s + Type cache. Reduced
+        //   v1.0.12:       Phase 2 → realtime 60s + Type cache. Reduced
         //                  but still a perceptible 60s tick on busy
         //                  late-game scenes (FindObjectsOfType across
         //                  thousands of MonoBehaviours, three times).
-        //   v1.0.11:       Replaced with event-driven attach via Harmony
+        //   v1.0.12:       Replaced with event-driven attach via Harmony
         //                  postfix on Building.Awake (see
         //                  BuildingAttachPatches). LateInit now runs
         //                  exactly once after a brief delay, just to
@@ -1199,7 +1199,7 @@ namespace WardenOfTheWilds
             catch { }
         }
 
-        // v1.0.11 — Type resolution cache. Previously TryAttachComponents
+        // v1.0.12 — Type resolution cache. Previously TryAttachComponents
         // walked AppDomain.CurrentDomain.GetAssemblies() on EVERY call —
         // 100+ assemblies in a modded build, each with 3 GetType lookups.
         // Combined with the 30s scaled-time Phase 2 loop, this was the
@@ -1253,7 +1253,7 @@ namespace WardenOfTheWilds
         private bool TryAttachComponents()
         {
             // DEFENSIVE: previous implementation iterated every loaded
-            // assembly without try/catch on every call. v1.0.11 caches
+            // assembly without try/catch on every call. v1.0.12 caches
             // the resolved Types so steady-state polls do zero
             // assembly-walk work — only the FindObjectsOfType scans
             // (gated by feature flags) remain.
