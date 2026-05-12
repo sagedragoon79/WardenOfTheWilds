@@ -746,10 +746,18 @@ namespace WardenOfTheWilds.Patches
                     }
                 }
 
-                // ── Kiting intercept (HuntingLodge path only) ─────────────────
+                // ── Kiting intercept (universal — v1.0.13) ────────────────────
+                //   Originally gated to HuntingLodge (BGH) hunters only via
+                //   a proximity check, which false-positived T1 hunters near
+                //   a BGH cabin. v1.0.13 first tightened the gate to require
+                //   actual BGH residence, then dropped the gate entirely per
+                //   user decision: all hunters benefit from kiting, since the
+                //   post-shot retreat (line 875) was already universal. BGH
+                //   keeps its other path-specific benefits (speed bonus,
+                //   targeting priority, shoot multiplier) — see
+                //   IsHuntingLodgeHunter callsites below.
                 if (!WardenOfTheWildsMod.HuntingLodgeKitingEnabled.Value) return;
                 if (!isDangerous) return;
-                if (!IsHuntingLodgeHunter(hunter)) return;
 
                 // Find the nearest Hunting Blind within work radius
                 Component? cabin = FindCabinForHunter(hunter);
@@ -1778,65 +1786,38 @@ namespace WardenOfTheWilds.Patches
         // ════════════════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// Returns true if the given Component appears to be assigned to a
-        /// HuntingLodge — checked by proximity to any HuntingLodge building.
+        /// Returns true if the villager is actually employed by a HuntingLodge
+        /// (T2 Big Game Hunter) cabin — checked via <c>Villager.residence</c>,
+        /// not by proximity.
         ///
-        /// PERFORMANCE NOTE: This is called from postfixes that fire for every
-        /// villager in the scene. Uses a two-level time-based cache:
-        ///   L1 — per-villager result, TTL=10s (avoids repeated proximity math)
-        ///   L2 — HunterBuilding scan, TTL=5s  (avoids repeated FindObjectsOfType)
+        /// HISTORY (v1.0.13 bug fix):
+        ///   Prior versions did a proximity check — true for any hunter within
+        ///   ~270u of any HuntingLodge cabin. That false-positived T1 hunters
+        ///   and Trap Master hunters whose patrol path crossed near a BGH
+        ///   cabin, giving them kiting + BGH speed bonus they shouldn't have.
+        ///   Now we use the authoritative residence lookup
+        ///   (FindAssignedHunterBuilding) which reads the same field vanilla's
+        ///   own hunter-task code reads.
+        ///
+        /// PERFORMANCE: rides on FindAssignedHunterBuilding's 10s per-villager
+        /// cache, so this is essentially free in the hot path. The legacy
+        /// proximity caches (_cachedLodgeBuildings, _lodgeBuildingCacheExpiry)
+        /// are no longer used by this method but kept around in case other
+        /// systems still reference them.
         /// </summary>
         private static bool IsHuntingLodgeHunter(Component villager)
         {
+            if (villager == null) return false;
             try
             {
-                int vKey = System.Runtime.CompilerServices
-                    .RuntimeHelpers.GetHashCode(villager);
+                Component? assigned = FindAssignedHunterBuilding(villager);
+                if (assigned == null) return false;
 
-                // L1: per-villager cache
-                if (_hunterLodgeCacheResult.TryGetValue(vKey, out bool cachedResult) &&
-                    _hunterLodgeCacheExpiry.TryGetValue(vKey, out float cachedExpiry) &&
-                    Time.time < cachedExpiry)
-                    return cachedResult;
-
-                // L2: refresh building list if stale
-                if (Time.time >= _lodgeBuildingCacheExpiry)
-                {
-                    _cachedLodgeBuildings.Clear();
-                    Type? hunterType = FindType("HunterBuilding");
-                    if (hunterType != null)
-                    {
-                        float checkRadius = 200f * WardenOfTheWildsMod.HuntingLodgeRadiusMult.Value;
-                        foreach (UnityEngine.Object obj in
-                            UnityEngine.Object.FindObjectsOfType(hunterType))
-                        {
-                            var b = obj as Component;
-                            if (b == null) continue;
-                            var enh = b.GetComponent<HunterCabinEnhancement>();
-                            if (enh?.Path == HunterT2Path.HuntingLodge)
-                                _cachedLodgeBuildings.Add(new CachedBuilding(b, checkRadius));
-                        }
-                    }
-                    _lodgeBuildingCacheExpiry = Time.time + BuildingCacheTTL;
-                }
-
-                // Proximity check against cached buildings
-                Vector3 vPos = villager.transform.position;
-                bool result = false;
-                foreach (var entry in _cachedLodgeBuildings)
-                {
-                    if (entry.Building == null) continue;
-                    if (Vector3.Distance(entry.Building.transform.position, vPos) < entry.WorkRadius)
-                    {
-                        result = true;
-                        break;
-                    }
-                }
-
-                // Store in L1 cache
-                _hunterLodgeCacheResult[vKey] = result;
-                _hunterLodgeCacheExpiry[vKey]  = Time.time + HunterCacheTTL;
-                return result;
+                // Residence is a HunterBuilding — now check whether it's the
+                // T2 HuntingLodge specialization. Vanilla / TrapperLodge return
+                // false so their hunters don't get BGH-only behavior.
+                var enh = assigned.GetComponent<HunterCabinEnhancement>();
+                return enh != null && enh.Path == HunterT2Path.HuntingLodge;
             }
             catch { }
             return false;

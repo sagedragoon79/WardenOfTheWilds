@@ -10,10 +10,10 @@
          AssemblyVersion is intentionally pinned at 1.0.0.0 so assembly-load
          consumers (none in this case, but defensive) aren't broken by patch
          bumps; FileVersion / Version carry the real patch number. -->
-    <Version>1.0.12</Version>
+    <Version>1.0.13</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.12.0</FileVersion>
-    <InformationalVersion>1.0.12</InformationalVersion>
+    <FileVersion>1.0.13.0</FileVersion>
+    <InformationalVersion>1.0.13</InformationalVersion>
     <Product>Warden of the Wilds</Product>
     <Description>Hunter and fishing overhaul for Farthest Frontier.</Description>
     <Authors>SageDragoon</Authors>
