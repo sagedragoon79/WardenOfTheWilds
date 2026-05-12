@@ -4,6 +4,20 @@
     <TargetFramework>net46</TargetFramework>
     <AssemblyName>WardenOfTheWilds</AssemblyName>
     <RootNamespace>WardenOfTheWilds</RootNamespace>
+
+    <!-- Version metadata — surfaces in Windows file properties + reflection.
+         Keep these in sync with the MelonInfo attribute in Plugin.cs.
+         AssemblyVersion is intentionally pinned at 1.0.0.0 so assembly-load
+         consumers (none in this case, but defensive) aren't broken by patch
+         bumps; FileVersion / Version carry the real patch number. -->
+    <Version>1.0.12</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.12.0</FileVersion>
+    <InformationalVersion>1.0.12</InformationalVersion>
+    <Product>Warden of the Wilds</Product>
+    <Description>Hunter and fishing overhaul for Farthest Frontier.</Description>
+    <Authors>SageDragoon</Authors>
+    <Copyright>Copyright © SageDragoon</Copyright>
     <!-- Annotations only: keeps `?` and `= null!` syntax parseable but suppresses
          null-reference-type warnings. Unity's ==null override and MonoBehaviour
          lifecycle produce too many false positives for full nullable analysis. -->
