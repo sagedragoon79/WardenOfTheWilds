@@ -68,7 +68,7 @@ namespace WardenOfTheWilds
                 /*version*/ null,
                 /*iconResourcePath*/ null,
                 /*accentRgb — moss/forest green*/ new[] { 0.30f, 0.50f, 0.25f, 1f },
-                /*order*/ 10
+                /*order*/ 20
             });
         }
 
