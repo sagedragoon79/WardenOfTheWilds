@@ -23,6 +23,8 @@ namespace WardenOfTheWilds.Systems
     {
         private static KeyCode _selectAllKey = KeyCode.K;
         private static KeyCode _selectAllModifier = KeyCode.LeftControl;
+        private static KeyCode _dogRallyKey = KeyCode.D;
+        private static KeyCode _dogRallyModifier = KeyCode.LeftControl;
         private static bool _keysResolved = false;
 
         private static float _lastKeyResolve = 0f;
@@ -34,6 +36,12 @@ namespace WardenOfTheWilds.Systems
 
             if (IsComboDown(_selectAllKey, _selectAllModifier))
                 SelectAllHunters();
+
+            // v1.0.14 — Ctrl+D dog rally (DLC). The internal call already
+            // gates on PetsDlcActive, so pressing it on a non-DLC save is
+            // a silent no-op.
+            if (IsComboDown(_dogRallyKey, _dogRallyModifier))
+                SelectAllHunterDogs();
         }
 
         private static void ResolveKeysIfStale()
@@ -46,6 +54,10 @@ namespace WardenOfTheWilds.Systems
             ParseBinding(WardenOfTheWildsMod.HunterSelectAllKeyName.Value,
                 KeyCode.K, KeyCode.LeftControl,
                 out _selectAllKey, out _selectAllModifier);
+
+            ParseBinding(WardenOfTheWildsMod.DogRallyKeyName.Value,
+                KeyCode.D, KeyCode.LeftControl,
+                out _dogRallyKey, out _dogRallyModifier);
         }
 
         /// <summary>
@@ -137,7 +149,7 @@ namespace WardenOfTheWilds.Systems
             var im = gm?.inputManager;
             if (im == null) return;
 
-            int selected = 0;
+            int hunters = 0;
             foreach (var hunter in EnumerateHunters())
             {
                 var selectable = hunter.GetComponent<SelectableComponent>() as ISelectable
@@ -145,11 +157,52 @@ namespace WardenOfTheWilds.Systems
                 if (selectable == null) continue;
 
                 im.SelectSelectable(selectable);
-                selected++;
+                hunters++;
             }
 
-            if (selected > 0)
-                MelonLogger.Msg($"[WotW] Select-all: {selected} hunter(s) selected.");
+            if (hunters > 0)
+                MelonLogger.Msg($"[WotW] Select-all: {hunters} hunter(s) selected.");
+        }
+
+        /// <summary>
+        /// v1.0.14 — Separate dog-rally hotkey (Ctrl+D by default).
+        /// Selects every dog currently assigned to a hunter occupation.
+        /// Dogs are registered as defenders on VillagerOccupationHunter;
+        /// we walk every hunter's defender list to collect them. After
+        /// selection, vanilla's right-click-to-move handles the move
+        /// command. DLC-gated.
+        /// </summary>
+        public static void SelectAllHunterDogs()
+        {
+            if (!Systems.DlcDetection.PetsDlcActive) return;
+
+            var gm = UnitySingleton<GameManager>.Instance;
+            var im = gm?.inputManager;
+            if (im == null) return;
+
+            int dogs = 0;
+            foreach (var hunter in EnumerateHunters())
+            {
+                if (!(hunter.occupation is VillagerOccupationHunter occ)) continue;
+
+                foreach (IDefender defender in occ.defenders)
+                {
+                    if (defender == null) continue;
+                    var defGo = defender.gameObject;
+                    if (defGo == null) continue;
+
+                    var defSelectable =
+                        defGo.GetComponent<SelectableComponent>() as ISelectable
+                        ?? defGo.GetComponent<MonoBehaviour>() as ISelectable;
+                    if (defSelectable == null) continue;
+
+                    im.SelectSelectable(defSelectable);
+                    dogs++;
+                }
+            }
+
+            if (dogs > 0)
+                MelonLogger.Msg($"[WotW] Dog rally: {dogs} hunter dog(s) selected.");
         }
 
         private static IEnumerable<Villager> EnumerateHunters()

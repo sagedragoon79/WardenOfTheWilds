@@ -55,6 +55,15 @@ namespace WardenOfTheWilds.Patches
         private static readonly BindingFlags AllInstance =
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
 
+        // v1.0.14 fix — vanilla's `itemGroupsToSeek` on VillagerOccupationHunter
+        // is `protected static`, NOT instance. The original AllInstance lookup
+        // missed it for the lifetime of the mod, silently breaking the
+        // "bow + arrows required for hunter work" gate. Use this combined
+        // flag set when hunting fields that might be either static or instance.
+        private static readonly BindingFlags AllStaticOrInstance =
+            BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static;
+
         // Static so we only mutate the shared SeekItemEntry list once per
         // session (the list is constructed lazily on first hunter creation
         // and reused for all subsequent hunters).
@@ -113,13 +122,16 @@ namespace WardenOfTheWilds.Patches
                 }
 
                 Type t = __instance.GetType();
-                // itemGroupsToSeek is on VillagerOccupation (base class) — walk
-                // up the chain to find it.
+                // v1.0.14 — vanilla declares `itemGroupsToSeek` as
+                // `protected static List<SeekItemGroup>` on
+                // VillagerOccupationHunter. Walk up the chain AND search both
+                // static + instance — the original Instance-only lookup
+                // silently failed for the lifetime of v1.0.6–v1.0.13.
                 FieldInfo? groupsField = null;
                 Type? cur = t;
                 while (cur != null && groupsField == null)
                 {
-                    groupsField = cur.GetField("itemGroupsToSeek", AllInstance);
+                    groupsField = cur.GetField("itemGroupsToSeek", AllStaticOrInstance);
                     cur = cur.BaseType;
                 }
                 if (groupsField == null)
@@ -130,7 +142,12 @@ namespace WardenOfTheWilds.Patches
                     return;
                 }
 
-                var groups = groupsField.GetValue(__instance) as System.Collections.IList;
+                // Static fields take null for the instance arg; instance fields
+                // accept the live receiver. GetValue handles both correctly.
+                var groups = (groupsField.IsStatic
+                                ? groupsField.GetValue(null)
+                                : groupsField.GetValue(__instance))
+                    as System.Collections.IList;
                 if (groups == null) { _seekThresholdBumped = true; return; }
 
                 int bumped = 0;

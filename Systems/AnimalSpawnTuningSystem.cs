@@ -34,6 +34,17 @@ namespace WardenOfTheWilds.Systems
         private static readonly Dictionary<int, int> _origInitialCount =
             new Dictionary<int, int>();
 
+        // ── DLC originals (per AnimalManager instance) ──────────────────────
+        // The DLC fields live on AnimalManager directly, not on the per-
+        // species ScriptableObject. We cache originals on first sighting
+        // so map-load reapplication doesn't compound multipliers.
+        private static int? _origFoxSpawnDelayDays;
+        private static int? _origGroundhogSpawnDelayDays;
+        // AnimationCurve keys cached as raw arrays — Keyframe is a struct
+        // and AnimationCurve.keys gives us a fresh copy on each access.
+        private static Keyframe[] _origFoxGroupsCurve;
+        private static Keyframe[] _origGroundhogGroupsCurve;
+
         public static void OnMapLoaded()
         {
             try
@@ -55,19 +66,151 @@ namespace WardenOfTheWilds.Systems
                 {
                     MelonLogger.Warning(
                         "[WotW] AnimalSpawnTuning: group dictionary not found.");
-                    return;
+                }
+                else
+                {
+                    foreach (var key in dict.Keys)
+                    {
+                        if (key == null) continue;
+                        ApplyTuning(key);
+                    }
                 }
 
-                foreach (var key in dict.Keys)
-                {
-                    if (key == null) continue;
-                    ApplyTuning(key);
-                }
+                // DLC tuning (fox + groundhog) — runs only when Pets DLC is
+                // active. The fields exist on AnimalManager in both pre- and
+                // post-DLC builds, so reflection is safe either way; we just
+                // gate execution on ownership so non-DLC sessions stay clean.
+                if (DlcDetection.PetsDlcActive)
+                    ApplyDlcSpawnTuning(animalManager);
             }
             catch (Exception ex)
             {
                 MelonLogger.Warning($"[WotW] AnimalSpawnTuningSystem: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Applies fox + groundhog spawn-delay and group-count tuning to the
+        /// live AnimalManager. Caches originals on first run so subsequent
+        /// map loads (or mid-session config changes) recompute from the true
+        /// baseline rather than compounding.
+        /// </summary>
+        private static void ApplyDlcSpawnTuning(object animalManager)
+        {
+            try
+            {
+                Type t = animalManager.GetType();
+
+                // ── Spawn delays ─────────────────────────────────────────────
+                ApplyDelayField(animalManager, t, "foxSpawnDelayInDays",
+                    WardenOfTheWildsMod.FoxSpawnDelayDays.Value,
+                    ref _origFoxSpawnDelayDays, "Fox");
+
+                ApplyDelayField(animalManager, t, "groundhogSpawnDelayInDays",
+                    WardenOfTheWildsMod.GroundhogSpawnDelayDays.Value,
+                    ref _origGroundhogSpawnDelayDays, "Groundhog");
+
+                // ── Group-count curves ───────────────────────────────────────
+                ApplyCurveMultiplier(animalManager, t, "maxFoxGroupsByChickenCount",
+                    WardenOfTheWildsMod.FoxSpawnMultiplier.Value,
+                    ref _origFoxGroupsCurve, "Fox");
+
+                ApplyCurveMultiplier(animalManager, t, "maxGroundhogGroupsByFieldCount",
+                    WardenOfTheWildsMod.GroundhogSpawnMultiplier.Value,
+                    ref _origGroundhogGroupsCurve, "Groundhog");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] ApplyDlcSpawnTuning: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Overrides an integer spawn-delay field if the configured value is
+        /// non-negative (-1 = "leave vanilla alone"). Caches the original on
+        /// first sighting.
+        /// </summary>
+        private static void ApplyDelayField(
+            object animalManager, Type t, string fieldName,
+            int configValue, ref int? cachedOriginal, string label)
+        {
+            var field = t.GetField(fieldName, AllInstance);
+            if (field == null)
+            {
+                MelonLogger.Warning(
+                    $"[WotW] DLC spawn tuning: field '{fieldName}' not found on AnimalManager.");
+                return;
+            }
+
+            int current = (int)field.GetValue(animalManager);
+            if (!cachedOriginal.HasValue) cachedOriginal = current;
+
+            // -1 = sentinel for "don't touch; restore vanilla if we'd
+            // previously written something."
+            int target = configValue < 0 ? cachedOriginal.Value : configValue;
+            if (target == current) return;
+
+            field.SetValue(animalManager, target);
+            MelonLogger.Msg(
+                $"[WotW] {label} spawn delay: {current} → {target} days " +
+                $"(vanilla baseline {cachedOriginal.Value}).");
+        }
+
+        /// <summary>
+        /// Scales every keyframe value in an AnimationCurve by the configured
+        /// multiplier. Original keys are cached on first sighting so map-load
+        /// reapplication uses a stable baseline.
+        /// </summary>
+        private static void ApplyCurveMultiplier(
+            object animalManager, Type t, string fieldName,
+            float multiplier, ref Keyframe[] cachedOriginal, string label)
+        {
+            var field = t.GetField(fieldName, AllInstance);
+            if (field == null)
+            {
+                MelonLogger.Warning(
+                    $"[WotW] DLC spawn tuning: field '{fieldName}' not found on AnimalManager.");
+                return;
+            }
+
+            var curve = field.GetValue(animalManager) as AnimationCurve;
+            if (curve == null) return;
+
+            if (cachedOriginal == null)
+            {
+                // Deep-copy keyframes — AnimationCurve.keys returns a fresh
+                // array but the Keyframe struct values are copied by value,
+                // so this snapshot is independent of further mutations.
+                cachedOriginal = (Keyframe[])curve.keys.Clone();
+            }
+
+            // No-op when multiplier == 1.0 and the curve already matches
+            // baseline (re-applying after mid-session config edit).
+            if (Mathf.Approximately(multiplier, 1.0f))
+            {
+                // Restore baseline if we'd previously scaled it.
+                bool matchesBaseline = curve.keys.Length == cachedOriginal.Length;
+                for (int i = 0; matchesBaseline && i < cachedOriginal.Length; i++)
+                    if (!Mathf.Approximately(curve.keys[i].value, cachedOriginal[i].value))
+                        matchesBaseline = false;
+
+                if (matchesBaseline) return;
+            }
+
+            // Rebuild curve with scaled values
+            var newKeys = new Keyframe[cachedOriginal.Length];
+            for (int i = 0; i < cachedOriginal.Length; i++)
+            {
+                Keyframe k = cachedOriginal[i];
+                k.value = k.value * multiplier;
+                newKeys[i] = k;
+            }
+            curve.keys = newKeys;
+            field.SetValue(animalManager, curve);
+
+            MelonLogger.Msg(
+                $"[WotW] {label} group-count curve scaled by {multiplier:F2}× " +
+                $"({cachedOriginal.Length} keyframes).");
         }
 
         /// <summary>

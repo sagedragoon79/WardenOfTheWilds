@@ -10,10 +10,10 @@
          AssemblyVersion is intentionally pinned at 1.0.0.0 so assembly-load
          consumers (none in this case, but defensive) aren't broken by patch
          bumps; FileVersion / Version carry the real patch number. -->
-    <Version>1.0.13</Version>
+    <Version>1.0.14</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.13.0</FileVersion>
-    <InformationalVersion>1.0.13</InformationalVersion>
+    <FileVersion>1.0.14.0</FileVersion>
+    <InformationalVersion>1.0.14</InformationalVersion>
     <Product>Warden of the Wilds</Product>
     <Description>Hunter and fishing overhaul for Farthest Frontier.</Description>
     <Authors>SageDragoon</Authors>
@@ -31,71 +31,71 @@
   <ItemGroup>
     <!-- MelonLoader (Mono / net35 build) -->
     <Reference Include="MelonLoader">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\MelonLoader\net35\MelonLoader.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\MelonLoader\net35\MelonLoader.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="0Harmony">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\MelonLoader\net35\0Harmony.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\MelonLoader\net35\0Harmony.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <!-- netstandard shim required when net46 projects reference netstandard 2.x assemblies -->
     <Reference Include="netstandard">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\netstandard.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\netstandard.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
     <!-- Unity -->
     <Reference Include="UnityEngine">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UIModule">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.UIModule.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.UIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.UI.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.UI.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.AIModule">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.AIModule.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.AIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.PhysicsModule">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
     <!-- TextMeshPro (UI injection) -->
     <Reference Include="Unity.TextMeshPro">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\Unity.TextMeshPro.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\Unity.TextMeshPro.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
     <!-- Game assembly -->
     <Reference Include="Assembly-CSharp">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <!-- ES2 (Easy Save 2) lives in firstpass; needed for Save/Load patches -->
     <Reference Include="Assembly-CSharp-firstpass">
-      <HintPath>G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Farthest Frontier_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
@@ -103,7 +103,7 @@
   <!-- Post-build: copy DLL to Mods folder -->
   <Target Name="CopyToMods" AfterTargets="Build">
     <Copy SourceFiles="$(TargetPath)"
-          DestinationFolder="G:\SteamLibrary\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Mods\" />
+          DestinationFolder="C:\Program Files (x86)\Steam\steamapps\common\Farthest Frontier\Farthest Frontier (Mono)\Mods\" />
   </Target>
 
 </Project>

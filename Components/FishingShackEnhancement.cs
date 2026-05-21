@@ -703,11 +703,14 @@ namespace WardenOfTheWilds.Components
             {
                 var shack = GetComponent<FishingShack>();
                 if (shack == null) return;
+
+                uint target = (uint)Mathf.Max(1, targetCap);
+
+                // 1) Set the raw field (display + future snapshot source).
                 var field = shack.GetType().GetField("fishStorageCapacity", AllInstance);
                 if (field != null && field.FieldType == typeof(uint))
                 {
                     uint current = (uint)field.GetValue(shack);
-                    uint target = (uint)Mathf.Max(1, targetCap);
                     if (current != target)
                     {
                         field.SetValue(shack, target);
@@ -715,12 +718,156 @@ namespace WardenOfTheWilds.Components
                             $"[WotW] '{gameObject.name}' fishStorageCapacity: {current} → {target}");
                     }
                 }
+
+                // 2) v1.0.14 — The DLC snapshots fishStorageCapacity into a
+                //    `nonManufacturingCapacities` List<ItemBundle> during the
+                //    shack's init (BEFORE our InitializeDelayed runs), and the
+                //    actual storage cap is enforced from THAT list, not the
+                //    live field. Setting the field alone left the cap at the
+                //    snapshotted 100. So we also rewrite the ItemFish bundle's
+                //    numberOfItems in nonManufacturingCapacities.
+                UpdateFishCapacityBundle(shack, target);
             }
             catch (Exception ex)
             {
                 WardenOfTheWildsMod.Log.Warning(
                     $"[WotW] SetFishStorageCapacity: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Rewrites the ItemFish entry's numberOfItems in the shack's private
+        /// nonManufacturingCapacities list (the cap the storage system actually
+        /// enforces post-DLC). numberOfItems has a private setter, so we poke
+        /// the compiler backing field directly.
+        /// </summary>
+        private void UpdateFishCapacityBundle(FishingShack shack, uint target)
+        {
+            try
+            {
+                var listField = shack.GetType().GetField(
+                    "nonManufacturingCapacities", AllInstance);
+                var list = listField?.GetValue(shack) as System.Collections.IList;
+                if (list == null)
+                {
+                    WardenOfTheWildsMod.Log.Warning(
+                        $"[WotW] '{gameObject.name}' UpdateFishCapacityBundle: " +
+                        $"nonManufacturingCapacities field not found / null.");
+                    return;
+                }
+
+                var wbm = UnitySingleton<GameManager>.Instance?.workBucketManager;
+                var fishItem = wbm?.itemFish;
+                // Resolve the canonical Fish ItemID once for reliable matching.
+                object fishItemID = fishItem != null
+                    ? ReadMember(fishItem, "itemID")
+                    : null;
+
+                int updated = 0;
+                foreach (var bundle in list)
+                {
+                    if (bundle == null) continue;
+
+                    object bId   = ReadMember(bundle, "itemID");
+                    string bName = ReadMember(bundle, "name") as string
+                                   ?? GetInheritedString(bundle, "_name")
+                                   ?? "<?>";
+
+                    // Diagnostic dump — gated behind DiagnosticsEnabled so it
+                    // doesn't spam the log on every mode switch in normal play.
+                    if (WardenOfTheWildsMod.DiagnosticsEnabled.Value)
+                    {
+                        object bCount = ReadMember(bundle, "numberOfItems");
+                        WardenOfTheWildsMod.Log.Msg(
+                            $"[WotW] [FishCapDump] bundle name='{bName}' itemID={bId} count={bCount}");
+                    }
+
+                    // Match by itemID first (most reliable), then name contains "Fish".
+                    bool isFish =
+                        (fishItemID != null && bId != null && bId.Equals(fishItemID))
+                        || (bName.IndexOf("Fish", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    if (!isFish) continue;
+
+                    // numberOfItems { get; private set; } → backing field
+                    var backing = GetInheritedField(bundle.GetType(),
+                        "<numberOfItems>k__BackingField");
+                    if (backing != null)
+                    {
+                        uint prev = backing.GetValue(bundle) is uint u ? u : 0u;
+                        if (prev != target)
+                        {
+                            backing.SetValue(bundle, target);
+                            // Only log on an actual change — avoids spamming
+                            // the log on every mode switch once the cap is set.
+                            WardenOfTheWildsMod.Log.Msg(
+                                $"[WotW] '{gameObject.name}' fish storage cap " +
+                                $"{prev} → {target}.");
+                        }
+                        updated++;
+                    }
+                }
+
+                if (updated == 0)
+                    WardenOfTheWildsMod.Log.Warning(
+                        $"[WotW] '{gameObject.name}' UpdateFishCapacityBundle: " +
+                        $"no ItemFish entry found in nonManufacturingCapacities " +
+                        $"({list.Count} bundle(s)).");
+            }
+            catch (Exception ex)
+            {
+                WardenOfTheWildsMod.Log.Warning(
+                    $"[WotW] UpdateFishCapacityBundle: {ex.Message}");
+            }
+        }
+
+        // ── Reflection helpers (walk inheritance chain) ────────────────────
+        private static string GetInheritedString(object obj, string fieldName)
+        {
+            try
+            {
+                System.Type t = obj.GetType();
+                while (t != null)
+                {
+                    var f = t.GetField(fieldName, AllInstance);
+                    if (f != null) return f.GetValue(obj) as string;
+                    t = t.BaseType;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static FieldInfo GetInheritedField(System.Type startType, string fieldName)
+        {
+            System.Type t = startType;
+            while (t != null)
+            {
+                var f = t.GetField(fieldName, AllInstance);
+                if (f != null) return f;
+                t = t.BaseType;
+            }
+            return null;
+        }
+
+        /// <summary>Reads a property OR field by name (walks inheritance), returns
+        /// boxed value or null. Used for diagnostic dumps + flexible matching.</summary>
+        private static object ReadMember(object obj, string name)
+        {
+            try
+            {
+                System.Type t = obj.GetType();
+                while (t != null)
+                {
+                    var p = t.GetProperty(name, AllInstance);
+                    if (p != null && p.CanRead) return p.GetValue(obj);
+                    var f = t.GetField(name, AllInstance);
+                    if (f != null) return f.GetValue(obj);
+                    t = t.BaseType;
+                }
+            }
+            catch { }
+            return null;
         }
 
         // -- Worker slots (same pattern as HunterCabinEnhancement) ----------

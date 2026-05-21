@@ -232,6 +232,11 @@ namespace WardenOfTheWilds.Patches
                 var enh = comp?.GetComponent<HunterCabinEnhancement>();
                 int pathInt = enh != null ? (int)enh.Path : (int)HunterT2Path.Vanilla;
                 writer.Write(pathInt);
+
+                // v1.0.14 — Append the per-cabin dog leash bool. Position
+                // after the path int; LoadPostfix reads in the same order.
+                bool leashed = enh?.DogLeashEnabled ?? true;
+                writer.Write(leashed);
             }
             catch (Exception ex)
             {
@@ -276,6 +281,21 @@ namespace WardenOfTheWilds.Patches
                 HunterCabinEnhancement.SetSavedPathForPosition(comp.transform.position, path);
                 MelonLogger.Msg(
                     $"[WotW] HunterCabinLoadPostfix: '{comp.gameObject.name}' restored path={path}");
+
+                // v1.0.14 — Read the per-cabin dog leash bool appended after
+                // path. Inner try so a save from v1.0.13 (path only, no bool)
+                // doesn't fail the whole load — falls through to default.
+                try
+                {
+                    bool leashed = reader.Read<bool>();
+                    HunterCabinEnhancement.SetSavedLeashForPosition(
+                        comp.transform.position, leashed);
+                }
+                catch
+                {
+                    // Pre-v1.0.14 save with no leash bool — default (true)
+                    // remains in effect, no log noise.
+                }
             }
             catch (Exception ex)
             {

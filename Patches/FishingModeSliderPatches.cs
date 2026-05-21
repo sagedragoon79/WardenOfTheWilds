@@ -188,6 +188,17 @@ namespace WardenOfTheWilds.Patches
                 enh, gameFont, gameFontSize, isLocked: false);
 
             // -- Creeler button (possibly locked) --
+            // v1.0.14 — Defensive re-query before reading the cached flag.
+            //   Post-DLC the tech tree's init order shifted enough that the
+            //   one-shot PatchTechTreeDelayed pass can read curRank=0 even
+            //   when the save has the rank fully researched, leaving the
+            //   flag stuck at false for the session. RefreshFishingTechState
+            //   re-reads the live geFishReplenishRateMultiplier value, which
+            //   is the authoritative effect-applied check — that's what the
+            //   game itself uses to gate the Sustainable Fishing effect.
+            //   Cost is one reflection field read per slider injection,
+            //   trivial compared to the UI rebuild around it.
+            WardenOfTheWildsMod.RefreshFishingTechState();
             bool creelerLocked = !WardenOfTheWildsMod.SustainableFishingResearched;
             CreateSideLabel(row.transform, "Creeler", FishingShackMode.Creeler,
                 enh, gameFont, gameFontSize, isLocked: creelerLocked);

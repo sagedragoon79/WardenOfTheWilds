@@ -60,6 +60,13 @@ namespace WardenOfTheWilds.Components
         private static readonly Dictionary<int, HunterT2Path> SavedPaths =
             new Dictionary<int, HunterT2Path>();
 
+        // ── Per-cabin "dog leash" state (v1.0.14 — DLC) ─────────────────────
+        // Same SavedPaths-style indirection so HunterCabinPatches.LoadPostfix
+        // can stash deserialized values before the matching enhancement's
+        // InitializeDelayed picks them up.
+        private static readonly Dictionary<int, bool> SavedLeashStates =
+            new Dictionary<int, bool>();
+
         /// <summary>
         /// Called from HunterCabinPatches.LoadPostfix when FF's vanilla save
         /// stream has just yielded our appended path int. Stores the path keyed
@@ -69,6 +76,14 @@ namespace WardenOfTheWilds.Components
         {
             int key = Mathf.RoundToInt(pos.x * 1000f + pos.z);
             SavedPaths[key] = path;
+        }
+
+        /// <summary>Companion to <see cref="SetSavedPathForPosition"/> for the
+        /// per-cabin dog leash bool.</summary>
+        internal static void SetSavedLeashForPosition(Vector3 pos, bool leashed)
+        {
+            int key = Mathf.RoundToInt(pos.x * 1000f + pos.z);
+            SavedLeashStates[key] = leashed;
         }
 
         private int GetBuildingKey()
@@ -94,6 +109,22 @@ namespace WardenOfTheWilds.Components
             }
         }
 
+        // Per-cabin dog leash (DLC feature). When true, assigned hunting dogs
+        // are pulled back inside the cabin's work radius if they stray. Default
+        // is true — most players don't want dogs roaming far chasing wolves
+        // into the woods.
+        private bool _dogLeashEnabled = true;
+        public bool DogLeashEnabled
+        {
+            get => _dogLeashEnabled;
+            set
+            {
+                if (_dogLeashEnabled == value) return;
+                _dogLeashEnabled = value;
+                SavedLeashStates[GetBuildingKey()] = value;
+            }
+        }
+
         // ── Shared ScriptableObject state (ManufactureDefinition is a shared
         //    asset across all HunterBuilding instances, so zeroing its iron
         //    cost once applies to every cabin). Reset per map so a new save
@@ -107,6 +138,7 @@ namespace WardenOfTheWilds.Components
         public static void OnMapLoaded()
         {
             SavedPaths.Clear();
+            SavedLeashStates.Clear();
             _trapRecipeZeroed = false;
             _outputCapsBumped = false;
         }
@@ -124,7 +156,13 @@ namespace WardenOfTheWilds.Components
             _initialized = true;
 
             RestoreSavedPath();
+            RestoreSavedLeash();
             ApplyPath();
+
+            // v1.0.14 — Dog leash enforcement (DLC). Runs only when Pets DLC
+            // is active; idle no-op for non-DLC cabins. Coroutine gates itself
+            // on DogLeashEnabled + DLC each tick so toggling is responsive.
+            StartCoroutine(DogLeashEnforcementLoop());
 
             // Zero out iron cost on the trap-production recipe so Trap Master
             // doesn't drain the iron economy. ManufactureDefinition is a shared
@@ -195,6 +233,57 @@ namespace WardenOfTheWilds.Components
         /// (Item), and the quantity lives on SourceItemDefinition itself as
         /// `_numSourceItemsNeeded` (int).
         /// </summary>
+        /// <summary>
+        /// Resolves a Building's manufactureDefinitions list robustly. Post-DLC
+        /// this is a PROPERTY that delegates to buildingData.manufactureDefinitions
+        /// (no backing field on Building), so the old FindBackingField lookup
+        /// returned null and silently broke ZeroTrapRecipeCosts +
+        /// BumpHunterOutputCaps. Try, in order:
+        ///   1. property getter (get_manufactureDefinitions)
+        ///   2. direct instance field
+        ///   3. compiler backing field
+        ///   4. building.buildingData.manufactureDefinitions (the SO source)
+        /// </summary>
+        private static System.Collections.IList GetManufactureDefinitions(Building building)
+        {
+            try
+            {
+                System.Type bt = building.GetType();
+
+                var prop = bt.GetProperty("manufactureDefinitions", AllInstance);
+                if (prop != null && prop.CanRead)
+                {
+                    if (prop.GetValue(building) is System.Collections.IList l1 && l1.Count > 0)
+                        return l1;
+                }
+
+                var field = bt.GetField("manufactureDefinitions", AllInstance);
+                if (field?.GetValue(building) is System.Collections.IList l2 && l2.Count > 0)
+                    return l2;
+
+                var backing = FindBackingField(bt, "manufactureDefinitions");
+                if (backing?.GetValue(building) is System.Collections.IList l3 && l3.Count > 0)
+                    return l3;
+
+                // Fall back to the SO: building.buildingData.manufactureDefinitions
+                var bdProp = bt.GetProperty("buildingData", AllInstance);
+                object bd = bdProp?.GetValue(building);
+                if (bd == null)
+                {
+                    var bdField = FindField(bt, "buildingData") ?? FindField(bt, "_buildingData");
+                    bd = bdField?.GetValue(building);
+                }
+                if (bd != null)
+                {
+                    var soField = bd.GetType().GetField("manufactureDefinitions", AllInstance);
+                    if (soField?.GetValue(bd) is System.Collections.IList l4 && l4.Count > 0)
+                        return l4;
+                }
+            }
+            catch { }
+            return null;
+        }
+
         private void ZeroTrapRecipeCosts()
         {
             try
@@ -202,11 +291,14 @@ namespace WardenOfTheWilds.Components
                 var building = GetComponent<Building>();
                 if (building == null) return;
 
-                var manuField = FindBackingField(building.GetType(), "manufactureDefinitions");
-                if (manuField == null) return;
-
-                var manuList = manuField.GetValue(building) as System.Collections.IList;
-                if (manuList == null || manuList.Count == 0) return;
+                var manuList = GetManufactureDefinitions(building);
+                if (manuList == null || manuList.Count == 0)
+                {
+                    WardenOfTheWildsMod.Log.Warning(
+                        $"[WotW] ZeroTrapRecipeCosts: manufactureDefinitions not resolved " +
+                        $"on '{gameObject.name}' — trap iron cost NOT zeroed.");
+                    return;
+                }
 
                 foreach (var manuDef in manuList)
                 {
@@ -275,8 +367,7 @@ namespace WardenOfTheWilds.Components
 
                 int target = System.Math.Max(1, WardenOfTheWildsMod.HunterCabinOutputStorageCap.Value);
 
-                var manuField = FindBackingField(building.GetType(), "manufactureDefinitions");
-                var manuList = manuField?.GetValue(building) as System.Collections.IList;
+                var manuList = GetManufactureDefinitions(building);
                 if (manuList == null || manuList.Count == 0) return;
 
                 int bumped = 0;
@@ -526,6 +617,140 @@ namespace WardenOfTheWilds.Components
         {
             if (SavedPaths.TryGetValue(GetBuildingKey(), out HunterT2Path saved))
                 _path = saved;
+        }
+
+        private void RestoreSavedLeash()
+        {
+            if (SavedLeashStates.TryGetValue(GetBuildingKey(), out bool saved))
+                _dogLeashEnabled = saved;
+        }
+
+        // ── Dog leash enforcement (DLC) ──────────────────────────────────────
+        //
+        // Every 2 wall-seconds: for each hunter worker at this cabin, walk
+        // their VillagerOccupationHunter.defenders list and pull each one
+        // back inside the cabin's work radius if it has strayed. Gated on
+        // DogLeashEnabled + DlcDetection.PetsDlcActive — non-DLC cabins
+        // tick the coroutine but do no work.
+        //
+        // Recall mechanism: when a dog is outside the leash radius, we
+        // clear its current combat target via combatComp.ClearAllTargetData
+        // and set a move command back to the cabin's center. The dog's
+        // task system then routes movement.
+        private IEnumerator DogLeashEnforcementLoop()
+        {
+            // Initial settle so building + workers are wired up.
+            yield return new WaitForSeconds(3f);
+
+            var tick = new WaitForSecondsRealtime(2f);
+            while (this != null && gameObject != null)
+            {
+                yield return tick;
+
+                if (!_dogLeashEnabled) continue;
+                if (!Systems.DlcDetection.PetsDlcActive) continue;
+
+                try { EnforceDogLeashOnce(); }
+                catch (System.Exception ex)
+                {
+                    WardenOfTheWildsMod.Log.Warning(
+                        $"[WotW] DogLeashEnforcementLoop: {ex.Message}");
+                }
+            }
+        }
+
+        private void EnforceDogLeashOnce()
+        {
+            var hb = GetComponent<HunterBuilding>();
+            if (hb == null) return;
+
+            // Effective work radius — same calc used elsewhere in the file
+            // for HuntingLodge path. Vanilla baseline is 100u.
+            float baseRadius = 100f;
+            if (_path == HunterT2Path.HuntingLodge)
+                baseRadius *= WardenOfTheWildsMod.HuntingLodgeRadiusMult.Value;
+            float radiusSqr = baseRadius * baseRadius;
+
+            Vector3 cabinPos = transform.position;
+
+            // Iterate worker → defenders without taking a hard ref to
+            // VillagerOccupationHunter (it's stable but reflection keeps
+            // this future-proof).
+            foreach (var worker in hb.workersRO)
+            {
+                if (!(worker is Villager v) || v.occupation == null) continue;
+
+                var occType = v.occupation.GetType();
+                if (occType.Name != "VillagerOccupationHunter") continue;
+
+                var defField = occType.GetProperty("defenders", AllInstance);
+                if (defField == null) continue;
+
+                var defenders = defField.GetValue(v.occupation)
+                    as System.Collections.IEnumerable;
+                if (defenders == null) continue;
+
+                foreach (var defender in defenders)
+                {
+                    var defGo = (defender as Component)?.gameObject;
+                    if (defGo == null) continue;
+
+                    Vector3 dogPos = defGo.transform.position;
+                    float sqr = (dogPos - cabinPos).sqrMagnitude;
+                    if (sqr <= radiusSqr) continue;
+
+                    RecallDogToCabin(defGo, cabinPos);
+                }
+            }
+        }
+
+        private void RecallDogToCabin(GameObject dog, Vector3 cabinPos)
+        {
+            try
+            {
+                // Clear combat target so the dog stops chasing whatever
+                // pulled it out of bounds.
+                var combatProp = dog.GetType().GetProperty("combatComp", AllInstance)
+                              ?? typeof(MonoBehaviour).GetProperty("combatComp", AllInstance);
+                var dogComp = dog.GetComponent<MonoBehaviour>();
+                var combatCompField = FindMember(dog, "combatComp");
+                object combatComp = combatCompField?.Invoke();
+                if (combatComp != null)
+                {
+                    var clear = combatComp.GetType().GetMethod("ClearAllTargetData");
+                    clear?.Invoke(combatComp, null);
+                }
+
+                // Issue a navmesh move command. The Dog/Pet has an AICrateNavMeshAgent
+                // — calling SetDestination directly moves it.
+                var agent = dog.GetComponent<AICrateNavMeshAgent>();
+                if (agent != null)
+                {
+                    var setDest = agent.GetType().GetMethod("SetDestination",
+                        new[] { typeof(Vector3) });
+                    setDest?.Invoke(agent, new object[] { cabinPos });
+                }
+            }
+            catch (System.Exception ex)
+            {
+                WardenOfTheWildsMod.Log.Warning(
+                    $"[WotW] RecallDogToCabin: {ex.Message}");
+            }
+        }
+
+        private System.Func<object> FindMember(GameObject host, string name)
+        {
+            try
+            {
+                var comp = host.GetComponent<MonoBehaviour>();
+                if (comp == null) return null;
+                var prop = comp.GetType().GetProperty(name, AllInstance);
+                if (prop != null) return () => prop.GetValue(comp);
+                var field = comp.GetType().GetField(name, AllInstance);
+                if (field != null) return () => field.GetValue(comp);
+                return null;
+            }
+            catch { return null; }
         }
 
         // ── Path application ──────────────────────────────────────────────────
@@ -1358,6 +1583,19 @@ namespace WardenOfTheWilds.Components
             // Hunter / Trap Master buttons on the building info window).
             // No per-frame slider poll, no P hotkey. If you need keyboard control
             // later, wire it as an event-based shortcut, not a per-frame Input check.
+
+            // v1.0.14 — Dog leash hotkey (DLC). Only fires when this cabin is
+            // selected so multiple cabins don't all toggle on one keypress.
+            // Gated on DLC active so non-DLC saves never see the toggle.
+            if (selected
+                && Systems.DlcDetection.PetsDlcActive
+                && Input.GetKeyDown(WardenOfTheWildsMod.DogLeashKey))
+            {
+                DogLeashEnabled = !DogLeashEnabled;
+                WardenOfTheWildsMod.Log.Msg(
+                    $"[WotW] '{gameObject.name}' dog leash: " +
+                    $"{(DogLeashEnabled ? "ON (dogs stay in work area)" : "OFF (dogs roam free)")}");
+            }
         }
 
         // OnGUI fires 4+ times per frame per MonoBehaviour. Per-frame
@@ -1401,25 +1639,33 @@ namespace WardenOfTheWilds.Components
 
             string keyName = WardenOfTheWildsMod.HunterPathKey.ToString();
 
+            // v1.0.14 — DLC dog leash status line. Hidden on non-DLC saves.
+            string leashLine = "";
+            if (Systems.DlcDetection.PetsDlcActive)
+            {
+                string lk = WardenOfTheWildsMod.DogLeashKey.ToString();
+                leashLine = $"\nDog leash: {(_dogLeashEnabled ? "ON" : "OFF")}  [{lk}] toggle";
+            }
+
             string details = _path switch
             {
                 HunterT2Path.TrapperLodge =>
                     $"Pelts x{_cachedPeltMult:F2}  1 worker  |  Traps: Active\n" +
                     $"Specialises: Small game pelts\n" +
                     $"{(_trapperNearWater ? "Water bonus" : "")}\n" +
-                    $"[{keyName}] cycle path",
+                    $"[{keyName}] cycle path" + leashLine,
                 HunterT2Path.HuntingLodge =>
                     $"Radius x{WardenOfTheWildsMod.HuntingLodgeRadiusMult.Value:F1}  " +
                     $"2 workers  |  Traps: Off\n" +
                     $"Kiting: {(WardenOfTheWildsMod.HuntingLodgeKitingEnabled.Value ? "Active" : "Off")}\n" +
-                    $"[{keyName}] cycle path",
+                    $"[{keyName}] cycle path" + leashLine,
                 _ =>
                     // Vanilla T2 — prompt the player to pick a specialisation
                     $"Not specialised yet.\n" +
-                    $"[{keyName}] Trapper Lodge  |  Hunting Lodge",
+                    $"[{keyName}] Trapper Lodge  |  Hunting Lodge" + leashLine,
             };
 
-            GUI.Label(new Rect(screenPos.x - 145, y - 75, 290, 75),
+            GUI.Label(new Rect(screenPos.x - 145, y - 90, 290, 90),
                 $"[WotW] {PathDisplayName}\n{details}");
             GUI.color = Color.white;
         }

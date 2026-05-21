@@ -3,6 +3,7 @@ using HarmonyLib;
 using MelonLoader;
 using UnityEngine;
 using WardenOfTheWilds.Components;
+using WardenOfTheWilds.Systems;
 
 namespace WardenOfTheWilds.Patches
 {
@@ -133,6 +134,13 @@ namespace WardenOfTheWilds.Patches
                         $"(HunterCabinOutputStorageCap={cap}) — forfeit " +
                         $"{droppedMeat} meat, {droppedPelt} hide, {droppedTallow} tallow.");
                 }
+
+                // ── DLC: Fox + Groundhog catches (Phase 1) ─────────────────
+                // Trap Master's village-defender identity. Independent rolls
+                // on top of the small-carcass-spawn event. Soft-gated by
+                // DlcDetection.PetsDlcActive — non-DLC players never enter
+                // the body.
+                TryRollFoxOrGroundhog(__instance);
             }
             catch (Exception ex)
             {
@@ -163,6 +171,88 @@ namespace WardenOfTheWilds.Patches
             storage.AddItems(new ItemBundle(item, deposit, 100u));
             uint after = storage.GetItemCount(item);
             return after >= before ? after - before : 0u;
+        }
+
+        // ════════════════════════════════════════════════════════════════════
+        //  DLC: Fox + Groundhog catches (Phase 1)
+        // ════════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Rolls independent fox and groundhog catches when a Trap Master
+        /// small-carcass spawn event fires. Both gated by Pets DLC ownership;
+        /// non-DLC players never enter the body (DlcDetection.PetsDlcActive
+        /// returns false).
+        ///
+        /// Designed to fail safely on any reflection / item lookup miss —
+        /// missing items just skip silently rather than throwing.
+        /// </summary>
+        private static void TryRollFoxOrGroundhog(AnimalTrapResource trap)
+        {
+            try
+            {
+                if (!DlcDetection.PetsDlcActive) return;
+                if (trap == null) return;
+
+                var cabin = trap.huntersResidence;
+                if (cabin == null) return;
+
+                var enh = cabin.GetComponent<HunterCabinEnhancement>();
+                if (enh == null || enh.Path != HunterT2Path.TrapperLodge) return;
+
+                var storage = cabin.storage;
+                if (storage == null) return;
+
+                var wbm = UnitySingleton<GameManager>.Instance?.workBucketManager;
+                if (wbm == null) return;
+
+                int cap = WardenOfTheWildsMod.HunterCabinOutputStorageCap.Value;
+
+                // ── Fox roll ─────────────────────────────────────────────────
+                float foxChance = WardenOfTheWildsMod.TrapMasterFoxChance.Value;
+                if (foxChance > 0f && UnityEngine.Random.value <= foxChance)
+                {
+                    int bonusHide = WardenOfTheWildsMod.TrapMasterFoxBonusHide.Value;
+                    uint added = DepositClamped(storage, wbm.itemHide, bonusHide, cap);
+                    MelonLogger.Msg(
+                        $"[WotW] FOX TRAP! Trap Master '{cabin.gameObject.name}' caught a fox " +
+                        $"raiding chickens. +{added} hide (chance {foxChance:F3}).");
+
+                    int dropped = bonusHide - (int)added;
+                    if (dropped > 0)
+                        MelonLogger.Warning(
+                            $"[WotW] FoxTrap: '{cabin.gameObject.name}' at cap — " +
+                            $"forfeit {dropped} hide.");
+                }
+
+                // ── Groundhog roll ───────────────────────────────────────────
+                float ghChance = WardenOfTheWildsMod.TrapMasterGroundhogChance.Value;
+                if (ghChance > 0f && UnityEngine.Random.value <= ghChance)
+                {
+                    int bonusCarcass = WardenOfTheWildsMod.TrapMasterGroundhogBonusCarcass.Value;
+                    int bonusHide    = WardenOfTheWildsMod.TrapMasterGroundhogBonusHide.Value;
+
+                    uint addedCarcass = DepositClamped(
+                        storage, wbm.itemSmallCarcass, bonusCarcass, cap);
+                    uint addedHide    = DepositClamped(
+                        storage, wbm.itemHide, bonusHide, cap);
+
+                    MelonLogger.Msg(
+                        $"[WotW] GROUNDHOG TRAP! Trap Master '{cabin.gameObject.name}' caught a " +
+                        $"groundhog raiding crops. +{addedCarcass} small carcass, +{addedHide} hide " +
+                        $"(chance {ghChance:F3}).");
+
+                    int droppedCarcass = bonusCarcass - (int)addedCarcass;
+                    int droppedHide    = bonusHide    - (int)addedHide;
+                    if (droppedCarcass > 0 || droppedHide > 0)
+                        MelonLogger.Warning(
+                            $"[WotW] GroundhogTrap: '{cabin.gameObject.name}' at cap — " +
+                            $"forfeit {droppedCarcass} carcass, {droppedHide} hide.");
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] TryRollFoxOrGroundhog: {ex.Message}");
+            }
         }
     }
 }
