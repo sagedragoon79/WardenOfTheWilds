@@ -38,8 +38,10 @@ namespace WardenOfTheWilds.Systems
     ///   across save/load (it's a runtime tag), so on reload our patches
     ///   may briefly miss WotW-spawned foxes — but the top-up loop will
     ///   re-spawn fresh ones, and the old ones either revert to vanilla
-    ///   behavior (DLC raiders) or eventually despawn naturally. Future
-    ///   improvement: persist the marker via the spawnTag field.
+    ///   behavior (DLC raiders) or eventually despawn naturally. The top-up
+    ///   counter includes all live foxes so reloads do not duplicate the
+    ///   saved population. Future improvement: persist the marker via the
+    ///   spawnTag field.
     /// </summary>
     public static class WildFoxSystem
     {
@@ -128,7 +130,9 @@ namespace WardenOfTheWilds.Systems
             EnsureFoxGroupDefResolved(animalManager);
             if (_foxGroupDef == null) return;
 
-            // Count currently-living wild foxes
+            // Count all living foxes, including saved WotW foxes whose runtime
+            // marker was lost during serialization. This prevents reloads from
+            // spawning a full duplicate population on top of saved foxes.
             int current = CountLivingWildFoxes(animalManager);
             int needed  = target - current;
             if (needed <= 0) return;
@@ -171,7 +175,7 @@ namespace WardenOfTheWilds.Systems
                 {
                     var go = (fox as Component)?.gameObject;
                     if (go == null) continue;
-                    if (go.GetComponent<WotWWildFoxMarker>() != null) count++;
+                    count++;
                 }
             }
             catch { /* return whatever we counted */ }

@@ -57,15 +57,15 @@ namespace WardenOfTheWilds.Components
         //      cabin's InitializeDelayed runs RestoreSavedPath.
         // OnMapLoaded clears the dict at scene-load start; Load patches run
         // during deserialization and re-populate it before component init reads.
-        private static readonly Dictionary<int, HunterT2Path> SavedPaths =
-            new Dictionary<int, HunterT2Path>();
+        private static readonly Dictionary<string, HunterT2Path> SavedPaths =
+            new Dictionary<string, HunterT2Path>();
 
         // ── Per-cabin "dog leash" state (v1.0.14 — DLC) ─────────────────────
         // Same SavedPaths-style indirection so HunterCabinPatches.LoadPostfix
         // can stash deserialized values before the matching enhancement's
         // InitializeDelayed picks them up.
-        private static readonly Dictionary<int, bool> SavedLeashStates =
-            new Dictionary<int, bool>();
+        private static readonly Dictionary<string, bool> SavedLeashStates =
+            new Dictionary<string, bool>();
 
         /// <summary>
         /// Called from HunterCabinPatches.LoadPostfix when FF's vanilla save
@@ -74,22 +74,26 @@ namespace WardenOfTheWilds.Components
         /// </summary>
         internal static void SetSavedPathForPosition(Vector3 pos, HunterT2Path path)
         {
-            int key = Mathf.RoundToInt(pos.x * 1000f + pos.z);
-            SavedPaths[key] = path;
+            SavedPaths[BuildPositionKey(pos)] = path;
         }
 
         /// <summary>Companion to <see cref="SetSavedPathForPosition"/> for the
         /// per-cabin dog leash bool.</summary>
         internal static void SetSavedLeashForPosition(Vector3 pos, bool leashed)
         {
-            int key = Mathf.RoundToInt(pos.x * 1000f + pos.z);
-            SavedLeashStates[key] = leashed;
+            SavedLeashStates[BuildPositionKey(pos)] = leashed;
         }
 
-        private int GetBuildingKey()
+        private static string BuildPositionKey(Vector3 pos)
         {
-            var pos = transform.position;
-            return Mathf.RoundToInt(pos.x * 1000f + pos.z);
+            int x = Mathf.RoundToInt(pos.x * 1000f);
+            int z = Mathf.RoundToInt(pos.z * 1000f);
+            return x + ":" + z;
+        }
+
+        private string GetBuildingKey()
+        {
+            return BuildPositionKey(transform.position);
         }
 
         // ── State ─────────────────────────────────────────────────────────────

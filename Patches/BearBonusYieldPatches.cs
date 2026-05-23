@@ -56,6 +56,7 @@ namespace WardenOfTheWilds.Patches
         {
             try
             {
+                if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return;
                 if (__instance == null) return;
 
                 int bearId = __instance.GetInstanceID();

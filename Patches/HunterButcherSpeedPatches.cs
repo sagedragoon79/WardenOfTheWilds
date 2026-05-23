@@ -26,6 +26,7 @@ namespace WardenOfTheWilds.Patches
         {
             try
             {
+                if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return;
                 // Is this work order running at a hunter cabin?
                 if (!(__instance.ownerBuilding is HunterBuilding hb)) return;
 

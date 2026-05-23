@@ -32,6 +32,7 @@ namespace WardenOfTheWilds.Patches
         {
             try
             {
+                if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return;
                 var gm = UnitySingleton<GameManager>.Instance;
                 var im = gm?.inputManager;
                 if (im?.selectedObjs == null) return;

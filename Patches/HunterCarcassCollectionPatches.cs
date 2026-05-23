@@ -48,6 +48,8 @@ namespace WardenOfTheWilds.Patches
         {
             try
             {
+                if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return true;
+                if (!WardenOfTheWildsMod.HunterCombatEnabled.Value) return true;
                 // Get hunter + building
                 var receiver = AccessTools.Field(typeof(TaskSearchEntry), "_receiver")
                     ?.GetValue(__instance);

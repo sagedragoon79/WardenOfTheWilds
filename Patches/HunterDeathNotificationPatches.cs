@@ -47,6 +47,7 @@ namespace WardenOfTheWilds.Patches
         {
             try
             {
+                if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return true;
                 if (receivedEvent?.villager == null) return true;
 
                 // Emigration is handled by vanilla's early-out; match that.

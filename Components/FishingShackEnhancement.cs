@@ -40,13 +40,19 @@ namespace WardenOfTheWilds.Components
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
 
         // -- Persistence: position-keyed (survives save/load) ---------------
-        private static readonly Dictionary<int, FishingShackMode> SavedModes =
-            new Dictionary<int, FishingShackMode>();
+        private static readonly Dictionary<string, FishingShackMode> SavedModes =
+            new Dictionary<string, FishingShackMode>();
 
-        private int GetBuildingKey()
+        private static string BuildPositionKey(Vector3 pos)
         {
-            var pos = transform.position;
-            return Mathf.RoundToInt(pos.x * 1000f + pos.z);
+            int x = Mathf.RoundToInt(pos.x * 1000f);
+            int z = Mathf.RoundToInt(pos.z * 1000f);
+            return x + ":" + z;
+        }
+
+        private string GetBuildingKey()
+        {
+            return BuildPositionKey(transform.position);
         }
 
         /// <summary>
@@ -57,8 +63,7 @@ namespace WardenOfTheWilds.Components
         /// </summary>
         internal static void SetSavedModeForPosition(Vector3 pos, FishingShackMode mode)
         {
-            int key = Mathf.RoundToInt(pos.x * 1000f + pos.z);
-            SavedModes[key] = mode;
+            SavedModes[BuildPositionKey(pos)] = mode;
         }
 
         // -- Static tracking ------------------------------------------------

@@ -52,6 +52,7 @@ namespace WardenOfTheWilds.Patches
             __state = uint.MaxValue;
             try
             {
+                if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return;
                 if (__instance == null) return;
                 var wbm = UnitySingleton<GameManager>.Instance?.workBucketManager;
                 if (wbm == null) return;
@@ -65,6 +66,7 @@ namespace WardenOfTheWilds.Patches
         {
             try
             {
+                if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return;
                 if (__instance == null) return;
 
                 var wbm = UnitySingleton<GameManager>.Instance?.workBucketManager;

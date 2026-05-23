@@ -65,6 +65,8 @@ namespace WardenOfTheWilds.Patches
             ref bool __result,
             ref bool forcedOutFromHiding)
         {
+            if (!WardenOfTheWildsMod.HunterOverhaulEnabled.Value) return;
+            if (!WardenOfTheWildsMod.HunterCombatEnabled.Value) return;
             if (!__result) return;  // vanilla says stay → nothing to do
 
             try

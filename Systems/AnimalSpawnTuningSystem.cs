@@ -231,7 +231,6 @@ namespace WardenOfTheWilds.Systems
                 string typeName = animalType?.ToString() ?? "";
 
                 float mult = GetMultiplierFor(typeName);
-                if (Mathf.Approximately(mult, 1.0f)) return;  // no-op
 
                 int instanceId = System.Runtime.CompilerServices
                     .RuntimeHelpers.GetHashCode(group);
