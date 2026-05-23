@@ -92,6 +92,16 @@ namespace WardenOfTheWilds.Patches
                     prefix:  new HarmonyMethod(typeof(PredatorAlertPatches), nameof(CtorPrefix)),
                     postfix: new HarmonyMethod(typeof(PredatorAlertPatches), nameof(CtorPostfix)));
 
+                // When a "Sighted" alert escalates to "Combat", vanilla
+                // Consolidate resets blurbDefinition back to the shared
+                // predatorCombatBlurb (+ re-derives selectedBlurbEntry),
+                // wiping our clone and reverting the icon to the default.
+                // Postfix it to re-apply the correct per-animal clone.
+                var consolidate = AccessTools.Method(containerType, "Consolidate");
+                if (consolidate != null)
+                    harmony.Patch(consolidate,
+                        postfix: new HarmonyMethod(typeof(PredatorAlertPatches), nameof(ConsolidatePostfix)));
+
                 // The blurb's persistent border/pulse color is baked into the
                 // UICriticalBlurb prefab (defaultColor = pulseImage.color at
                 // Awake), NOT driven by the blurb definition. So we also
@@ -183,25 +193,86 @@ namespace WardenOfTheWilds.Patches
                 _pendingClone = null;
                 if (clone == null || __instance == null) return;
 
-                Type t = __instance.GetType();
-
-                var bdBacking = GetInheritedField(t, "<blurbDefinition>k__BackingField");
-                bdBacking?.SetValue(__instance, clone);
-
-                // selectedBlurbEntry was derived from the original blurb during
-                // base ctor; repoint it at our clone's entry so color/text are
-                // consistent. Color is uniform across our clone's entries.
-                var entriesProp = clone.GetType().GetProperty("entries", AllInstance);
-                var entries = entriesProp?.GetValue(clone) as System.Collections.IList;
-                if (entries != null && entries.Count > 0)
-                {
-                    var sbeBacking = GetInheritedField(t, "<selectedBlurbEntry>k__BackingField");
-                    sbeBacking?.SetValue(__instance, entries[0]);
-                }
+                ApplyCloneToContainer(__instance, clone);
             }
             catch (Exception ex)
             {
                 MelonLogger.Warning($"[WotW] PredatorAlertPatches.CtorPostfix: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Postfix on Consolidate. When a Sighted alert escalates to Combat,
+        /// vanilla resets blurbDefinition to the shared predatorCombatBlurb,
+        /// wiping our clone. Recover the offending animal from the container's
+        /// enemyUnitsInCombat, rebuild the (now engaging → severity-correct)
+        /// clone, and re-apply it so the per-animal icon survives the merge.
+        /// </summary>
+        public static void ConsolidatePostfix(object __instance)
+        {
+            try
+            {
+                if (!WardenOfTheWildsMod.PredatorAlertsEnabled.Value) return;
+                if (__instance == null) return;
+
+                // If our clone is still in place, consolidation didn't reset us.
+                object bd = ReadMember(__instance, "blurbDefinition");
+                string bdName = (bd as UnityEngine.Object)?.name;
+                if (bdName != null && bdName.StartsWith("WotW_PredatorBlurb_"))
+                    return;
+                if (bd == null) return;   // nothing to clone from
+
+                // Recover the offending animal from the live combat list.
+                var enemies = ReadMember(__instance, "enemyUnitsInCombat")
+                                  as System.Collections.IList;
+                GameObject animalGo = null;
+                string kind = null;
+                if (enemies != null)
+                    foreach (var e in enemies)
+                    {
+                        var comp = e as Component;
+                        if (comp == null) continue;
+                        kind = ClassifyAnimal(comp.gameObject);
+                        if (kind != null) { animalGo = comp.gameObject; break; }
+                    }
+                if (animalGo == null || kind == null) return;
+
+                // Post-consolidation the blurb is Combat_Predator (engaging),
+                // so classify with sighted=false.
+                bool lowSeverity = DetermineLowSeverity(kind, animalGo, sighted: false);
+
+                var clone = GetOrBuildClone(bd, kind, lowSeverity);
+                if (clone == null) return;
+
+                ApplyCloneToContainer(__instance, clone);
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[WotW] PredatorAlertPatches.ConsolidatePostfix: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Points a container's blurbDefinition (+ selectedBlurbEntry, which
+        /// vanilla derives from the original/vanilla blurb) at our clone, so
+        /// the UI renders our icon + color. Shared by the ctor postfix (initial
+        /// apply) and the consolidate postfix (re-apply after vanilla reset).
+        /// </summary>
+        private static void ApplyCloneToContainer(object container, UnityEngine.Object clone)
+        {
+            Type t = container.GetType();
+
+            var bdBacking = GetInheritedField(t, "<blurbDefinition>k__BackingField");
+            bdBacking?.SetValue(container, clone);
+
+            // Repoint selectedBlurbEntry at our clone's entry so color/text are
+            // consistent. Color is uniform across our clone's entries.
+            var entriesProp = clone.GetType().GetProperty("entries", AllInstance);
+            var entries = entriesProp?.GetValue(clone) as System.Collections.IList;
+            if (entries != null && entries.Count > 0)
+            {
+                var sbeBacking = GetInheritedField(t, "<selectedBlurbEntry>k__BackingField");
+                sbeBacking?.SetValue(container, entries[0]);
             }
         }
 
