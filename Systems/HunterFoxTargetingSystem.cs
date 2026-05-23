@@ -43,7 +43,7 @@ namespace WardenOfTheWilds.Systems
         {
             _appliedThisSession = false;
 
-            if (!DlcDetection.PetsDlcActive) return;
+            if (!DlcDetection.PestGameplayActive) return;
             if (!WardenOfTheWildsMod.HuntersTargetFoxes.Value) return;
 
             MelonCoroutines.Start(WaitForFoxThenWire());

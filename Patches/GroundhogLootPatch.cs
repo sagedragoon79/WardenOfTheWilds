@@ -79,7 +79,7 @@ namespace WardenOfTheWilds.Patches
             {
                 if (__instance == null || _groundhogType == null) return;
                 if (!_groundhogType.IsInstanceOfType(__instance)) return;
-                if (!DlcDetection.PetsDlcActive) return;
+                if (!DlcDetection.PestGameplayActive) return;
 
                 var ghComp = __instance as Component;
                 if (ghComp == null) return;

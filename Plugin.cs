@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.14", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.15", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -213,6 +213,11 @@ namespace WardenOfTheWilds
         /// <summary>Hide units auto-looted into the nearest cabin when a
         /// groundhog is killed. 0 disables groundhog loot.</summary>
         public static MelonPreferences_Entry<int>    GroundhogKillBonusHide       { get; private set; } = null!;
+
+        /// <summary>Per-animal predator alerts: show the animal's sprite + a
+        /// severity color (amber for fox/fleeing-boar, red for wolf/bear/
+        /// attacking-boar) instead of the generic red bear alert.</summary>
+        public static MelonPreferences_Entry<bool>   PredatorAlertsEnabled        { get; private set; } = null!;
 
         // (Small-game spawn-unlock prefs removed in v1.0.3.)
 
@@ -776,6 +781,13 @@ namespace WardenOfTheWilds
                              "wolves/bears/boars. Without this, vanilla hunters ignore foxes (foxes " +
                              "are on Team.Pests, which isn't in vanilla's hunter target mask).");
 
+            PredatorAlertsEnabled = cat.CreateEntry("PredatorAlertsEnabled", true,
+                display_name: "Pets DLC: Per-Animal Predator Alerts",
+                description: "Replaces the generic red 'Predators are attacking!' alert with a " +
+                             "per-animal version: shows the actual animal's sprite and an amber " +
+                             "(low-threat: fox spotted / boar fleeing) vs red (wolf/bear/attacking " +
+                             "boar) color. Cosmetic — doesn't change combat behavior.");
+
             GroundhogKillBonusHide = cat.CreateEntry("GroundhogKillBonusHide", 1,
                 display_name: "Pets DLC: Groundhog Kill Pelt",
                 description: "Hide units auto-looted into the nearest hunter cabin (within 300u) when " +
@@ -1065,19 +1077,20 @@ namespace WardenOfTheWilds
             // class names are resolved at runtime via Assembly.GetType() scanning.
             HarmonyInstance.PatchAll();
 
-            // v1.0.14 — Event-driven enhancement attach. Replaces the
+            // v1.0.15 — Event-driven enhancement attach. Replaces the
             // perpetual LateInit Phase 2 polling loop that produced the
             // 60s scaled-time stutter. See BuildingAttachPatches header
             // for full context.
             BuildingAttachPatches.Apply(HarmonyInstance);
 
-            // v1.0.14 — DLC patches. Soft-fail when types are missing
+            // v1.0.15 — DLC patches. Soft-fail when types are missing
             // (pre-DLC Assembly-CSharp), no-op when DLC is owned but the
             // feature is disabled by pref.
             WildFoxDespawnPatch.Register(HarmonyInstance);
             CatBehaviorPatches.Register(HarmonyInstance);
             FoxCarcassDropPatch.Register(HarmonyInstance);
             GroundhogLootPatch.Register(HarmonyInstance);
+            PredatorAlertPatches.Register(HarmonyInstance);
 
             HunterCabinPatches.ApplyPatches(HarmonyInstance);
             HunterCombatPatches.ApplyPatches(HarmonyInstance);
@@ -1107,7 +1120,7 @@ namespace WardenOfTheWilds
             else
                 Log.Msg("[WotW] TechResearchPatches SKIPPED (TechTreePatchEnabled=false)");
 
-            Log.Msg($"[WotW] Warden of the Wilds 1.0.14 loaded." +
+            Log.Msg($"[WotW] Warden of the Wilds 1.0.15 loaded." +
                     $" TendedWilds: {TendedWildsActive}" +
                     $" | Hunter: {HunterOverhaulEnabled.Value}" +
                     $" | Fishing: {FishingOverhaulEnabled.Value}");
@@ -1147,11 +1160,11 @@ namespace WardenOfTheWilds
             // silently bails on every load with "animalManager not available".
             MelonCoroutines.Start(WaitForAnimalManagerThenInit());
 
-            // v1.0.14 — Wild fox population (DLC-gated). System gates itself
+            // v1.0.15 — Wild fox population (DLC-gated). System gates itself
             // on DlcDetection.PetsDlcActive, so non-DLC calls are free.
             WildFoxSystem.OnMapLoaded();
 
-            // v1.0.14 — Patch hunter target mask to include fox team so
+            // v1.0.15 — Patch hunter target mask to include fox team so
             // hunters engage foxes during HuntSubTask. Waits up to 2 min for
             // a live fox to read its team from, then ORs that team into
             // combatManager.huntingAnimalsTeamDefinition.
@@ -1192,7 +1205,7 @@ namespace WardenOfTheWilds
         /// </summary>
         private IEnumerator WaitForAnimalManagerThenInit()
         {
-            // v1.0.14 fix — switched to realtime polling + 5-min cap.
+            // v1.0.15 fix — switched to realtime polling + 5-min cap.
             //
             //  Original (broken): 30 × WaitForSeconds(1f). WaitForSeconds
             //  uses Time.timeScale, so on a paused load (player checks the
@@ -1208,7 +1221,7 @@ namespace WardenOfTheWilds
             const int  MaxAttempts  = 300;    // 300 × 1s = 5 min wall-clock
             const float PollSeconds = 1f;
 
-            // v1.0.14 fix #2 — wait for the spawn-interval DICT to be
+            // v1.0.15 fix #2 — wait for the spawn-interval DICT to be
             // populated, not just for animalManager to exist. The dict
             // (spawnIntervalsByAnimalGroupDict) is filled by
             // AnimalManager.LoadAnimals(), which runs AFTER animalManager
@@ -1217,7 +1230,7 @@ namespace WardenOfTheWilds
             // not found" → all species multipliers + fox/groundhog tuning
             // silently skipped. Now we gate on the dict having entries.
             //
-            // v1.0.14 fix #3 — don't burn the retry budget while GameManager
+            // v1.0.15 fix #3 — don't burn the retry budget while GameManager
             // is null. On a new game, the Map scene loads (starting this
             // coroutine) during the map-gen/preview screen, but GameManager
             // isn't instantiated until the player finalizes and enters the
@@ -1283,18 +1296,18 @@ namespace WardenOfTheWilds
             catch { return false; }
         }
 
-        // ── LateInit: one-shot catch-up sweep (v1.0.14) ────────────────────
+        // ── LateInit: one-shot catch-up sweep (v1.0.15) ────────────────────
         //
         // History:
         //   v1.0.0–v1.0.9: two-phase polling loop. Phase 1 ran 30 × 3s,
         //                  Phase 2 ran every 30s forever. The Phase 2
         //                  scaled-time tick produced a visible 30s/15s
         //                  stutter at 1x/2x speed.
-        //   v1.0.14:       Phase 2 → realtime 60s + Type cache. Reduced
+        //   v1.0.15:       Phase 2 → realtime 60s + Type cache. Reduced
         //                  but still a perceptible 60s tick on busy
         //                  late-game scenes (FindObjectsOfType across
         //                  thousands of MonoBehaviours, three times).
-        //   v1.0.14:       Replaced with event-driven attach via Harmony
+        //   v1.0.15:       Replaced with event-driven attach via Harmony
         //                  postfix on Building.Awake (see
         //                  BuildingAttachPatches). LateInit now runs
         //                  exactly once after a brief delay, just to
@@ -1487,7 +1500,7 @@ namespace WardenOfTheWilds
             catch { }
         }
 
-        // v1.0.14 — Type resolution cache. Previously TryAttachComponents
+        // v1.0.15 — Type resolution cache. Previously TryAttachComponents
         // walked AppDomain.CurrentDomain.GetAssemblies() on EVERY call —
         // 100+ assemblies in a modded build, each with 3 GetType lookups.
         // Combined with the 30s scaled-time Phase 2 loop, this was the
@@ -1541,7 +1554,7 @@ namespace WardenOfTheWilds
         private bool TryAttachComponents()
         {
             // DEFENSIVE: previous implementation iterated every loaded
-            // assembly without try/catch on every call. v1.0.14 caches
+            // assembly without try/catch on every call. v1.0.15 caches
             // the resolved Types so steady-state polls do zero
             // assembly-walk work — only the FindObjectsOfType scans
             // (gated by feature flags) remain.

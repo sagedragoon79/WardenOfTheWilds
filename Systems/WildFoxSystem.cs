@@ -59,9 +59,11 @@ namespace WardenOfTheWilds.Systems
         {
             try
             {
-                if (!DlcDetection.PetsDlcActive)
+                if (!DlcDetection.PestGameplayActive)
                 {
-                    // Non-DLC or feature disabled — never enter the spawn loop.
+                    // Non-DLC, feature disabled, OR "Disable Pests" (pacifist)
+                    // mode — never enter the spawn loop. Spawning huntable wild
+                    // foxes would override the player's relaxed-mode choice.
                     return;
                 }
 
@@ -96,10 +98,9 @@ namespace WardenOfTheWilds.Systems
 
             while (true)
             {
-                // Re-check the DLC + pref every tick so toggling at runtime
-                // takes effect on the next pass (no need to restart the
-                // game to disable wild foxes).
-                if (!DlcDetection.PetsDlcActive
+                // Re-check the DLC + pref + pacifist mode every tick so toggling
+                // at runtime takes effect on the next pass.
+                if (!DlcDetection.PestGameplayActive
                     || !WardenOfTheWildsMod.WildFoxEnabled.Value)
                 {
                     yield return wait;

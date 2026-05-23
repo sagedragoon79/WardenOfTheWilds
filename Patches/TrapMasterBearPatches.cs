@@ -190,7 +190,7 @@ namespace WardenOfTheWilds.Patches
         {
             try
             {
-                if (!DlcDetection.PetsDlcActive) return;
+                if (!DlcDetection.PestGameplayActive) return;
                 if (trap == null) return;
 
                 var cabin = trap.huntersResidence;

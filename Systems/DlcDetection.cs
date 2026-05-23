@@ -72,6 +72,76 @@ namespace WardenOfTheWilds.Systems
             }
         }
 
+        // ── Pacifist (Disable Pests) detection ──────────────────────────────
+        // FF v1.1.2 added a "Disable Pests" New Settlement option for a relaxed
+        // ambient experience without the fox/groundhog gameplay loop. Internally
+        // it's AnimalManager.pacifistFoxGroundhog (bool). When true, WotW must
+        // NOT spawn wild foxes, roll fox/groundhog trap catches, retarget
+        // hunters onto foxes, or auto-loot groundhog kills — doing so would
+        // override the player's relaxed-mode choice. Cat/dog QoL features are
+        // unaffected (pacifist mode is fox/groundhog-specific).
+        private static PropertyInfo _pacifistProp;
+        private static bool _pacifistResolveFailed;
+
+        /// <summary>
+        /// True only when DLC pest GAMEPLAY should run: DLC owned + WotW pref on
+        /// + the settlement is NOT in "Disable Pests" (pacifist) mode. Gate all
+        /// fox/groundhog gameplay features on this rather than PetsDlcActive.
+        /// </summary>
+        public static bool PestGameplayActive
+        {
+            get
+            {
+                if (!PetsDlcActive) return false;
+                return !IsPacifistMode();
+            }
+        }
+
+        /// <summary>
+        /// Reads AnimalManager.pacifistFoxGroundhog via reflection. Returns
+        /// false (pests active) if the property can't be resolved — so on an
+        /// older build or resolution miss we default to the normal gameplay
+        /// loop rather than silently disabling features.
+        /// </summary>
+        public static bool IsPacifistMode()
+        {
+            if (_pacifistResolveFailed) return false;
+            try
+            {
+                var gm = UnitySingleton<GameManager>.Instance;
+                var am = gm?.animalManager;
+                if (am == null) return false;
+
+                if (_pacifistProp == null)
+                {
+                    _pacifistProp = am.GetType().GetProperty("pacifistFoxGroundhog",
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (_pacifistProp == null)
+                    {
+                        // Fall back to a field if it's not a property on this build.
+                        var f = am.GetType().GetField("_pacifistFoxGroundhog",
+                            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                            ?? am.GetType().GetField("pacifistFoxGroundhog",
+                            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                        if (f != null) return f.GetValue(am) is bool fb && fb;
+
+                        _pacifistResolveFailed = true;
+                        MelonLogger.Msg(
+                            "[WotW] DlcDetection: pacifistFoxGroundhog not found " +
+                            "(pre-v1.1.2 build?) — treating pests as active.");
+                        return false;
+                    }
+                }
+
+                object val = _pacifistProp.GetValue(am);
+                return val is bool b && b;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         /// <summary>
         /// Raw Steam ownership check, ignoring the user pref. Useful for
         /// diagnostic logging where you want to distinguish "DLC not owned"
@@ -182,10 +252,12 @@ namespace WardenOfTheWilds.Systems
         {
             bool owned = IsPetsDlcOwned();
             bool pref  = WardenOfTheWildsMod.PetsDlcFeaturesEnabled?.Value ?? true;
+            bool pacifist = IsPacifistMode();
             MelonLogger.Msg(
                 $"[WotW] DLC detect — PetsDLC owned: {owned} | " +
-                $"WotW PetsDLC features enabled: {pref} | " +
-                $"effective: {(owned && pref)}");
+                $"WotW features enabled: {pref} | " +
+                $"Disable Pests (pacifist): {pacifist} | " +
+                $"pest gameplay active: {(owned && pref && !pacifist)}");
         }
     }
 }

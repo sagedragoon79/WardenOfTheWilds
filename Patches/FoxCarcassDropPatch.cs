@@ -110,7 +110,7 @@ namespace WardenOfTheWilds.Patches
                 //      leaving a pelt is correct regardless of why it spawned.
                 // DLC-gate still applies via PetsDlcActive (foxes only exist
                 // with the DLC), so non-DLC saves never reach here.
-                if (!Systems.DlcDetection.PetsDlcActive) return;
+                if (!Systems.DlcDetection.PestGameplayActive) return;
 
                 Vector3 deathPos = foxComp.transform.position;
 
