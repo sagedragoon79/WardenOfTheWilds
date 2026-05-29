@@ -1534,7 +1534,19 @@ namespace WardenOfTheWilds.Components
                         _workArea = gameObject.AddComponent<WorkArea>();
                 }
 
-                _workArea.Init(transform.position, radius);
+                // Preserve the existing work-area center. Vanilla saves/restores
+                // the player's moved (retargeted) center on load, and the player
+                // can drag it mid-game — but Init() recenters on the argument.
+                // Passing transform.position unconditionally was re-centering the
+                // work area on the cabin every load/path-apply, wiping the
+                // player's move ("work area reset on load"). Only fall back to the
+                // cabin position when the work area hasn't been initialized yet
+                // (fresh placement, before vanilla has set a center).
+                Vector3 center = transform.position;
+                try { if (_workArea.IsValid()) center = _workArea.GetCenter(); }
+                catch { }
+
+                _workArea.Init(center, radius);
                 RegenerateSelectionCircleEdges(_workArea);
 
                 var sel = GetComponent<SelectableComponent>();

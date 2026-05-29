@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.18", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.19", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -222,6 +222,30 @@ namespace WardenOfTheWilds
         /// <summary>Auto-name new DLC dogs/cats from curated lists instead of
         /// the generic "Dog"/"Cat" default.</summary>
         public static MelonPreferences_Entry<bool>   AutoNamePets                 { get; private set; } = null!;
+
+        // ── Hunter-dog combat (Pets DLC) ─────────────────────────────────────
+        /// <summary>Master toggle: hunter's dog taunts (force-targets) a predator
+        /// off the hunter and tanks it.</summary>
+        public static MelonPreferences_Entry<bool>   HunterDogTauntEnabled        { get; private set; } = null!;
+        /// <summary>Seconds between taunt re-asserts while the dog is tanking.</summary>
+        public static MelonPreferences_Entry<float>  HunterDogTauntPulseSeconds   { get; private set; } = null!;
+        /// <summary>After the dog starts fleeing (hit flee-HP or hunter retreated),
+        /// keep the predator chasing it this many seconds, then release.</summary>
+        public static MelonPreferences_Entry<float>  HunterDogTauntFadeSeconds    { get; private set; } = null!;
+        /// <summary>Max hunter↔dog distance for the taunt to engage.</summary>
+        public static MelonPreferences_Entry<float>  HunterDogTauntLeashRange     { get; private set; } = null!;
+        /// <summary>HP fraction (0-1) at which a hunting dog flees. Overrides the
+        /// vanilla 0.5 retreat threshold.</summary>
+        public static MelonPreferences_Entry<float>  DogFleeHealthPct             { get; private set; } = null!;
+        /// <summary>When the hunter retreats, the dog disengages and flees too.</summary>
+        public static MelonPreferences_Entry<bool>   DogAutoFleeWithHunter        { get; private set; } = null!;
+        /// <summary>Max-health multiplier applied to ALL dogs. 1.0 = vanilla.</summary>
+        public static MelonPreferences_Entry<float>  DogHealthMult                { get; private set; } = null!;
+        /// <summary>Flat armor added to ALL dogs' base armor. 0 = vanilla.</summary>
+        public static MelonPreferences_Entry<float>  DogArmorBonus                { get; private set; } = null!;
+        /// <summary>Movement-speed multiplier for ALL dogs. Faster dogs keep up
+        /// with a manually-moved hunter instead of lagging behind. 1.0 = vanilla.</summary>
+        public static MelonPreferences_Entry<float>  DogSpeedMult                 { get; private set; } = null!;
 
         // (Small-game spawn-unlock prefs removed in v1.0.3.)
 
@@ -804,6 +828,60 @@ namespace WardenOfTheWilds
                              "a groundhog/marmot is killed in combat. Small game = small reward: " +
                              "default 1 pelt, no carcass. 0 disables groundhog loot entirely.");
 
+            // ── Hunter-dog combat (Pets DLC) ─────────────────────────────────
+            HunterDogTauntEnabled = cat.CreateEntry("HunterDogTauntEnabled", true,
+                display_name: "Pets DLC: Hunter Dog Taunt",
+                description: "A dog assigned to a hunter force-pulls an attacking predator onto " +
+                             "itself (1 predator at a time) and tanks it, instead of letting the " +
+                             "predator peel onto the hunter. The dog tanks until it hits its flee " +
+                             "HP or the hunter retreats.");
+
+            HunterDogTauntPulseSeconds = cat.CreateEntry("HunterDogTauntPulseSeconds", 2.5f,
+                display_name: "Pets DLC: Dog Taunt Pulse (s)",
+                description: "Seconds between taunt re-asserts while the dog is tanking. Lower = " +
+                             "stickier hold, slightly more work. Default 2.5.");
+
+            HunterDogTauntFadeSeconds = cat.CreateEntry("HunterDogTauntFadeSeconds", 5f,
+                display_name: "Pets DLC: Dog Taunt Fade (s)",
+                description: "After the dog starts fleeing (hit flee HP, or the hunter retreated), " +
+                             "the predator keeps chasing the fleeing dog this many seconds — pulling " +
+                             "it off the hunter — then the taunt releases. Default 5.");
+
+            HunterDogTauntLeashRange = cat.CreateEntry("HunterDogTauntLeashRange", 100f,
+                display_name: "Pets DLC: Dog Taunt Range",
+                description: "Max hunter↔dog distance for the taunt to engage. Larger means a " +
+                             "trailing dog still reacts when the hunter engages from afar (dogs " +
+                             "lag behind when you manually move the hunter). Default 100u " +
+                             "(~a hunter work radius).");
+
+            DogFleeHealthPct = cat.CreateEntry("DogFleeHealthPct", 0.5f,
+                display_name: "Pets DLC: Dog Flee Health %",
+                description: "HP fraction (0-1) at which a hunting dog gives up and flees. Overrides " +
+                             "the vanilla 0.5. Lower = braver/longer tank, higher = flees sooner.");
+
+            DogAutoFleeWithHunter = cat.CreateEntry("DogAutoFleeWithHunter", true,
+                display_name: "Pets DLC: Dog Flees With Hunter",
+                description: "When the hunter retreats, the dog disengages and flees alongside him. " +
+                             "Combined with the taunt, the predator chases the fleeing dog (a moving " +
+                             "decoy) during the hunter's escape.");
+
+            DogHealthMult = cat.CreateEntry("DogHealthMult", 1.0f,
+                display_name: "Pets DLC: Dog Health Multiplier (all dogs)",
+                description: "Scales max health for EVERY dog (hunting + doghouse guards). 1.0 = " +
+                             "vanilla, 1.5 = +50% HP. Applied at spawn and on map load.");
+
+            DogArmorBonus = cat.CreateEntry("DogArmorBonus", 0f,
+                display_name: "Pets DLC: Dog Armor Bonus (all dogs)",
+                description: "Flat armor added to EVERY dog's base armor. 0 = vanilla. Helps dogs " +
+                             "survive longer when tanking predators.");
+
+            DogSpeedMult = cat.CreateEntry("DogSpeedMult", 1.5f,
+                display_name: "Pets DLC: Dog Speed Multiplier (all dogs)",
+                description: "Movement-speed multiplier for EVERY dog. Vanilla dogs lag behind a " +
+                             "manually-moved hunter, so they're far away (and can't engage) when " +
+                             "you start a fight. 1.5 keeps them close. 1.0 = vanilla. Applied at " +
+                             "spawn and on map load.");
+
             // (Small-game spawn-unlock prefs removed in v1.0.3.)
 
             BearSpawnMultiplier = cat.CreateEntry("BearSpawnMultiplier", 1.5f,
@@ -1102,6 +1180,7 @@ namespace WardenOfTheWilds
             GroundhogLootPatch.Register(HarmonyInstance);
             PredatorAlertPatches.Register(HarmonyInstance);
             PetNamePatches.Register(HarmonyInstance);
+            Systems.HunterDogCombatSystem.Register(HarmonyInstance);
 
             HunterCabinPatches.ApplyPatches(HarmonyInstance);
             HunterCombatPatches.ApplyPatches(HarmonyInstance);
@@ -1152,6 +1231,7 @@ namespace WardenOfTheWilds
             FishingShackEnhancement.OnMapLoaded();
             HuntingBlindSystem.OnMapLoaded();
             HunterCombatPatches.OnMapLoaded();
+            Systems.HunterDogCombatSystem.OnMapLoaded();
 
             // DLC ownership status (one log line per scene load — answers
             // the perennial "is the DLC actually detected?" question without

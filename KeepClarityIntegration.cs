@@ -248,6 +248,33 @@ namespace WardenOfTheWilds
                 NewMeta("Select All Hunters"));
             Reg("Hotkeys", WardenOfTheWildsMod.HunterPathKeyName,
                 NewMeta("Cycle T2 Path", "Cycle Vanilla / Trapper / Hunting Lodge while a T2 cabin is selected"));
+
+            // === Pets DLC — Hunter Dog === (hidden unless the DLC is active)
+            Func<bool> dlcOn = () => WardenOfTheWilds.Systems.DlcDetection.PetsDlcActive;
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.HunterDogTauntEnabled,
+                NewMeta("Dog Taunt (tank predators)",
+                    "Dog force-pulls one predator off the hunter and tanks it", visibleWhen: dlcOn));
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.HunterDogTauntPulseSeconds,
+                NewMeta("Taunt Pulse (s)", min: 0.5f, max: 6f,
+                    tooltip: "Seconds between taunt re-asserts while tanking", visibleWhen: dlcOn));
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.HunterDogTauntFadeSeconds,
+                NewMeta("Taunt Fade After Flee (s)", min: 0f, max: 20f,
+                    tooltip: "Predator chases the fleeing dog this long, then releases", visibleWhen: dlcOn));
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.HunterDogTauntLeashRange,
+                NewMeta("Taunt Range", min: 10f, max: 200f, visibleWhen: dlcOn));
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.DogFleeHealthPct,
+                NewMeta("Dog Flee Health %", min: 0.05f, max: 0.95f,
+                    tooltip: "HP fraction at which a hunting dog flees (vanilla 0.5)", visibleWhen: dlcOn));
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.DogAutoFleeWithHunter,
+                NewMeta("Dog Flees With Hunter",
+                    "Dog disengages and flees when the hunter retreats", visibleWhen: dlcOn));
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.DogHealthMult,
+                NewMeta("Dog Health Multiplier (all dogs)", min: 0.5f, max: 3.0f, visibleWhen: dlcOn));
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.DogArmorBonus,
+                NewMeta("Dog Armor Bonus (all dogs)", min: 0f, max: 10f, visibleWhen: dlcOn));
+            Reg("Pets DLC — Hunter Dog", WardenOfTheWildsMod.DogSpeedMult,
+                NewMeta("Dog Speed Multiplier (all dogs)", min: 1.0f, max: 3.0f,
+                    tooltip: "Faster dogs keep up with a manually-moved hunter", visibleWhen: dlcOn));
         }
     }
 }

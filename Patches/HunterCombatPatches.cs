@@ -354,16 +354,15 @@ namespace WardenOfTheWilds.Patches
             PatchMethodIfFound(harmony, "Villager", "OnDeath",
                 nameof(OnCombatDeathPostfix), isPostfix: true);
 
-            // ── Patch 2: Kiting intercept — target acquisition ────────────────
+            // ── Patch 2: Target acquisition (kiting intercept + dog taunt) ────
             // OnCombatTargetSet(IDamageable, IDamageable, TargetSourceIdentifier)
             // Fires when a villager acquires a new combat target.
-            // We intercept here to redirect HuntingLodge hunters to a stand when
-            // they target Wolf/Boar/Bear, instead of charging into melee range.
-            if (WardenOfTheWildsMod.HuntingLodgeKitingEnabled.Value)
-            {
-                PatchMethodIfFound(harmony, "Villager", "OnCombatTargetSet",
-                    nameof(OnCombatTargetSetPostfix), isPostfix: true);
-            }
+            // Always patched now — it drives BOTH the kiting intercept (gated
+            // inside on HuntingLodgeKitingEnabled) AND the dog-taunt trigger,
+            // which must fire on the hunter's attack-click regardless of whether
+            // kiting is enabled.
+            PatchMethodIfFound(harmony, "Villager", "OnCombatTargetSet",
+                nameof(OnCombatTargetSetPostfix), isPostfix: true);
 
             // ── Patch 3: Post-shot hook — dog decoy + post-shot retreat ───────
             // OnPerformedAttack(GameObject, TeamDefinition)
@@ -668,6 +667,20 @@ namespace WardenOfTheWilds.Patches
                 // Must be any hunter at all (any tier / path)
                 if (!IsAnyHunter(hunter)) return;
 
+                // ── Dog taunt trigger (independent of kiting) ─────────────────
+                // Fire the moment the hunter acquires a dangerous target — i.e.
+                // on the attack-click — so the dog engages before the first shot
+                // and before the animal retaliates. Runs even with kiting off.
+                {
+                    var dogTarget = ExtractComponent(newTarget);
+                    if (dogTarget != null && IsDangerousAnimal(dogTarget))
+                        HunterDogCombatSystem.EngageHuntersDog(dogTarget, hunter);
+                }
+
+                // Everything below is the kiting / retreat behavior — keep it
+                // gated so disabling kiting doesn't change movement behavior.
+                if (!WardenOfTheWildsMod.HuntingLodgeKitingEnabled.Value) return;
+
                 // Rate limit — don't fight the AI every time it re-evaluates
                 int hunterKey = System.Runtime.CompilerServices
                     .RuntimeHelpers.GetHashCode(hunter);
@@ -837,6 +850,10 @@ namespace WardenOfTheWilds.Patches
         {
             try
             {
+                // Drive dog-taunt maintenance on every shot too — the hunt-task
+                // tick can go sparse once a hunter is locked in active combat.
+                HunterDogCombatSystem.UpdateActiveTaunts();
+
                 var hunter = __instance as Component;
                 if (hunter == null || attackTarget == null) return;
                 // Post-shot retreat applies to ALL hunters — any tier, any path.
@@ -864,6 +881,15 @@ namespace WardenOfTheWilds.Patches
                 // Use GetGameComponent (not GetComponent<Component>) — the latter
                 // returns Transform first, not the actual Wolf/Deer/etc.
                 var animalComp = GetGameComponent(attackTarget);
+
+                // Hunter-dog taunt: the dog engages whatever DANGEROUS animal
+                // the hunter is shooting at — proactively, before the animal
+                // turns on the hunter. Firing on the hunter's attack (rather
+                // than the animal's aggro) means a bear the hunter is hunting
+                // gets tanked immediately. Called every shot, so it also retries
+                // until the dog is within leash range. No-op for deer / non-DLC.
+                if (animalComp != null && IsDangerousAnimal(animalComp))
+                    HunterDogCombatSystem.EngageHuntersDog(animalComp, hunter);
 
                 // Post-shot retreat — only when the target is dangerous AND charging.
                 //
@@ -931,6 +957,13 @@ namespace WardenOfTheWilds.Patches
                 if (hunter == null || !IsAnyHunter(hunter)) return;
 
                 RecordEngagementAndCheckRetreat(hunter, predator, "aggro");
+
+                // Reactive dog taunt: the predator just turned on the hunter
+                // (e.g. a wounded boar charging back in). The hunter-attack
+                // trigger only covers the proactive case; this covers the dog
+                // engaging when the animal attacks the hunter. Idempotent +
+                // priority-swap aware. (predator already confirmed dangerous.)
+                HunterDogCombatSystem.EngageHuntersDog(predator, hunter);
             }
             catch (Exception ex)
             {
@@ -2352,6 +2385,16 @@ namespace WardenOfTheWilds.Patches
                 if (hunter == null) { expired.Add(kv.Key); continue; }
 
                 ApplyKiteStep(hunter, target.transform.position);
+
+                // Re-attempt the dog taunt every kite tick so the dog grabs the
+                // hunter's kite target the moment it's within leash range, even
+                // if it was trailing when the fight started. Idempotent — no-op
+                // once a taunt for this predator is already active. Gated on
+                // IsDangerousAnimal: the kite target can be a fox (huntable wild
+                // foxes), and a fleeing fox isn't worth tanking — only Wolf/
+                // Boar/Bear should pull the dog.
+                if (IsDangerousAnimal(target))
+                    HunterDogCombatSystem.EngageHuntersDog(target, hunter);
             }
             foreach (var k in expired)
             {
@@ -2642,6 +2685,10 @@ namespace WardenOfTheWilds.Patches
             // (frequent enough to keep backward pressure during reload). This is
             // cheap: typically 0-2 active kites at any moment.
             UpdateActiveKites();
+
+            // Re-assert / fade-out any active hunter-dog taunts on the same tick.
+            // Cheap: iterates the small active-taunt set, no scene query.
+            HunterDogCombatSystem.UpdateActiveTaunts();
 
             try
             {
