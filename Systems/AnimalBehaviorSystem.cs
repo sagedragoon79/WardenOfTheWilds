@@ -518,22 +518,35 @@ namespace WardenOfTheWilds.Systems
             }
 
             // ── Weapon-aware reload time ──────────────────────────────────────
-            // Returns the configured bow reload time.
+            // Returns the crossbow reload time if the hunter is currently using
+            // crossbow animations, else the bow reload time.
             //
-            // Called by ApplyPostShotRetreat and DangerProximityWatcher (per
-            // active kite per HuntSubTask tick).
+            // Called by ApplyPostShotRetreat / ApplyKiteStep (per active kite per
+            // HuntSubTask tick — typically 0-2) and DangerProximityWatcher.
             //
-            // Perf (C): this used to walk the hunter's type hierarchy × 8
-            // candidate field names (~24 reflective GetField lookups) trying to
-            // detect a crossbow. None of those names exist on Villager/Character
-            // — the real crossbow state lives on CombatComponent.rangedWeaponData
-            // .useCrossbowAnims — so the scan ALWAYS fell through to the bow
-            // value. It was pure dead weight. Deleted; behavior is identical
-            // (the scan provably never matched). If crossbow-aware reload is
-            // wanted later, resolve CombatComponent.rangedWeaponData.useCrossbow
-            // Anims once and cache it — do NOT revive the dead candidate scan.
+            // The authoritative "is this hunter shooting a crossbow" signal is
+            // CombatComponent.rangedWeaponData.useCrossbowAnims (both public,
+            // directly typed — no reflection). A hunter only gets crossbow
+            // ranged-weapon data when the hunterAndGuardCrossbows game-effect
+            // policy is on AND they carry a crossbow, so this is automatically
+            // correct whether or not the policy is enabled.
+            //
+            // (Perf history C: this previously walked the hunter type hierarchy
+            // × 8 guessed field names that never existed — pure dead weight.
+            // Replaced with the real flag. No per-hunter cache: GetComponent is
+            // one component-list walk, called only for the 0-2 active kites per
+            // tick, and a keyed cache would need lifecycle pruning for no real
+            // saving. useCrossbowAnims also changes on weapon-swap, so reading
+            // it live avoids any staleness.)
             public static float GetEffectiveReloadSeconds(UnityEngine.Component hunter)
             {
+                if (hunter != null)
+                {
+                    var cc = hunter.GetComponent<CombatComponent>();
+                    if (cc != null && cc.rangedWeaponData != null
+                        && cc.rangedWeaponData.useCrossbowAnims)
+                        return WardenOfTheWildsMod.CrossbowReloadSeconds.Value;
+                }
                 return WardenOfTheWildsMod.BowReloadSeconds.Value;
             }
 
