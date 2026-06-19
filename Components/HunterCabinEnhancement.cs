@@ -130,10 +130,10 @@ namespace WardenOfTheWilds.Components
         }
 
         // ── Shared ScriptableObject state (ManufactureDefinition is a shared
-        //    asset across all HunterBuilding instances, so zeroing its iron
+        //    asset across all HunterBuilding instances, so adjusting its iron
         //    cost once applies to every cabin). Reset per map so a new save
         //    with different mod settings still applies cleanly.
-        private static bool _trapRecipeZeroed = false;
+        private static bool _trapRecipeAdjusted = false;
         // Output caps live on the same shared ManufactureDefinition SOs as the
         // iron-zeroing — apply once per scene load, propagates to every cabin.
         private static bool _outputCapsBumped = false;
@@ -143,7 +143,7 @@ namespace WardenOfTheWilds.Components
         {
             SavedPaths.Clear();
             SavedLeashStates.Clear();
-            _trapRecipeZeroed = false;
+            _trapRecipeAdjusted = false;
             _outputCapsBumped = false;
         }
 
@@ -168,14 +168,18 @@ namespace WardenOfTheWilds.Components
             // on DogLeashEnabled + DLC each tick so toggling is responsive.
             StartCoroutine(DogLeashEnforcementLoop());
 
-            // Zero out iron cost on the trap-production recipe so Trap Master
-            // doesn't drain the iron economy. ManufactureDefinition is a shared
-            // ScriptableObject, so the first cabin to run this applies the
-            // change to every cabin — subsequent invocations short-circuit.
-            if (!_trapRecipeZeroed)
+            // Reduce (do NOT zero) the trap-production recipe's iron cost so
+            // Trap Master is economical without draining iron. ManufactureDefinition
+            // is a shared ScriptableObject, so the first cabin to run this applies
+            // the change to every cabin — subsequent invocations short-circuit.
+            // CRITICAL: the cost must stay >= 1. Setting it to 0 trips an unguarded
+            // divide-by-zero in vanilla Building.CanProduceManufactureDefinition,
+            // which silently disables ALL trap crafting (Trap Master deploys zero
+            // traps). See _handoffs/2026-06-19_trap-cost-zero-divide-by-zero.md.
+            if (!_trapRecipeAdjusted)
             {
-                _trapRecipeZeroed = true;
-                ZeroTrapRecipeCosts();
+                _trapRecipeAdjusted = true;
+                ReduceTrapRecipeCosts();
             }
 
             // Bump produced-item output caps (Meat / Hide / Tallow → 200).
@@ -241,7 +245,7 @@ namespace WardenOfTheWilds.Components
         /// Resolves a Building's manufactureDefinitions list robustly. Post-DLC
         /// this is a PROPERTY that delegates to buildingData.manufactureDefinitions
         /// (no backing field on Building), so the old FindBackingField lookup
-        /// returned null and silently broke ZeroTrapRecipeCosts +
+        /// returned null and silently broke ReduceTrapRecipeCosts +
         /// BumpHunterOutputCaps. Try, in order:
         ///   1. property getter (get_manufactureDefinitions)
         ///   2. direct instance field
@@ -288,7 +292,16 @@ namespace WardenOfTheWilds.Components
             return null;
         }
 
-        private void ZeroTrapRecipeCosts()
+        // Floor for the trap recipe's iron cost. MUST be >= 1: vanilla
+        // Building.CanProduceManufactureDefinition divides by numSourceItemsNeeded
+        // with no zero-guard, so a 0 cost throws DivideByZeroException on routine
+        // work-scanning and the cabin never crafts an ItemAnimalTrap → no traps
+        // deploy at all. 1 keeps a real discount (vanilla trap = 2 iron) while
+        // staying a valid divisor and satisfying the CommitToWorkOrder /
+        // request-capacity invariants. See the trap-cost handoff doc.
+        private const int SafeTrapIronCost = 1;
+
+        private void ReduceTrapRecipeCosts()
         {
             try
             {
@@ -299,8 +312,8 @@ namespace WardenOfTheWilds.Components
                 if (manuList == null || manuList.Count == 0)
                 {
                     WardenOfTheWildsMod.Log.Warning(
-                        $"[WotW] ZeroTrapRecipeCosts: manufactureDefinitions not resolved " +
-                        $"on '{gameObject.name}' — trap iron cost NOT zeroed.");
+                        $"[WotW] ReduceTrapRecipeCosts: manufactureDefinitions not resolved " +
+                        $"on '{gameObject.name}' — trap iron cost NOT adjusted.");
                     return;
                 }
 
@@ -325,19 +338,22 @@ namespace WardenOfTheWilds.Components
                         if (qtyField == null) continue;
 
                         int oldQty = (int)qtyField.GetValue(srcDef);
-                        if (oldQty == 0) continue;
-                        qtyField.SetValue(srcDef, 0);
+                        // Idempotent + self-healing: also repairs a recipe SO that a
+                        // prior (buggy) zeroing left at 0 this session.
+                        if (oldQty == SafeTrapIronCost) continue;
+                        qtyField.SetValue(srcDef, SafeTrapIronCost);
 
                         WardenOfTheWildsMod.Log.Msg(
-                            $"[WotW] '{gameObject.name}' zeroed trap recipe cost: " +
-                            $"ItemIron {oldQty} → 0");
+                            $"[WotW] '{gameObject.name}' reduced trap recipe cost: " +
+                            $"ItemIron {oldQty} → {SafeTrapIronCost} (floored at 1 to avoid " +
+                            $"vanilla divide-by-zero)");
                     }
                 }
             }
             catch (System.Exception ex)
             {
                 WardenOfTheWildsMod.Log.Warning(
-                    $"[WotW] ZeroTrapRecipeCosts failed: {ex.Message}");
+                    $"[WotW] ReduceTrapRecipeCosts failed: {ex.Message}");
             }
         }
 
@@ -440,7 +456,7 @@ namespace WardenOfTheWilds.Components
         // NOTE: DumpRecipeDataCandidates + DumpManufactureDefinition were
         // one-shot diagnostics used to reverse-engineer the recipe field
         // layout. Kept for future reference / easy re-enable if the schema
-        // ever changes; they're no longer called by ZeroTrapRecipeCosts.
+        // ever changes; they're no longer called by ReduceTrapRecipeCosts.
         private void DumpRecipeDataCandidates(Building building)
         {
             try
