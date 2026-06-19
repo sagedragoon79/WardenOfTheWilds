@@ -518,55 +518,22 @@ namespace WardenOfTheWilds.Systems
             }
 
             // ── Weapon-aware reload time ──────────────────────────────────────
-            // Tries to detect whether the hunter has a crossbow equipped by
-            // reflecting on known weapon/policy field candidates. Falls back to
-            // the configured bow or crossbow reload preference, then to the
-            // FallbackReloadSeconds constant.
+            // Returns the configured bow reload time.
             //
-            // Called by ApplyPostShotRetreat and DangerProximityWatcher so that
-            // crossbow hunters back up further per shot (longer reload window).
-            private static readonly string[] CrossbowDetectCandidates = {
-                "hasCrossbow", "crossbowEquipped", "useCrossbow",
-                "weaponType", "currentWeapon", "equippedWeapon",
-                "attackWeapon", "rangedWeapon",
-            };
-
+            // Called by ApplyPostShotRetreat and DangerProximityWatcher (per
+            // active kite per HuntSubTask tick).
+            //
+            // Perf (C): this used to walk the hunter's type hierarchy × 8
+            // candidate field names (~24 reflective GetField lookups) trying to
+            // detect a crossbow. None of those names exist on Villager/Character
+            // — the real crossbow state lives on CombatComponent.rangedWeaponData
+            // .useCrossbowAnims — so the scan ALWAYS fell through to the bow
+            // value. It was pure dead weight. Deleted; behavior is identical
+            // (the scan provably never matched). If crossbow-aware reload is
+            // wanted later, resolve CombatComponent.rangedWeaponData.useCrossbow
+            // Anims once and cache it — do NOT revive the dead candidate scan.
             public static float GetEffectiveReloadSeconds(UnityEngine.Component hunter)
             {
-                // Try to detect crossbow from the hunter component
-                if (hunter != null)
-                {
-                    try
-                    {
-                        System.Type? t = hunter.GetType();
-                        while (t != null)
-                        {
-                            foreach (string candidate in CrossbowDetectCandidates)
-                            {
-                                // Check bool fields first (hasCrossbow, crossbowEquipped)
-                                var fi = t.GetField(candidate,
-                                    System.Reflection.BindingFlags.Public |
-                                    System.Reflection.BindingFlags.NonPublic |
-                                    System.Reflection.BindingFlags.Instance);
-                                if (fi != null)
-                                {
-                                    object? val = fi.GetValue(hunter);
-                                    if (val is bool b && b)
-                                        return WardenOfTheWildsMod.CrossbowReloadSeconds.Value;
-                                    // String/enum check: "Crossbow", "crossbow"
-                                    if (val != null && val.ToString()
-                                        .IndexOf("crossbow", System.StringComparison.OrdinalIgnoreCase) >= 0)
-                                        return WardenOfTheWildsMod.CrossbowReloadSeconds.Value;
-                                }
-                            }
-                            t = t.BaseType;
-                            if (t?.Name == "MonoBehaviour" || t?.Name == "Object") break;
-                        }
-                    }
-                    catch { }
-                }
-
-                // No crossbow detected — use bow reload time
                 return WardenOfTheWildsMod.BowReloadSeconds.Value;
             }
 

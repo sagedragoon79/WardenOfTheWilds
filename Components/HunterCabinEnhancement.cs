@@ -663,6 +663,13 @@ namespace WardenOfTheWilds.Components
             }
         }
 
+        // Perf (G): cache the VillagerOccupationHunter Type + its 'defenders'
+        // PropertyInfo once, resolved lazily on first match. Subsequent ticks
+        // use a Type reference-equality check instead of a per-worker string
+        // compare + GetProperty-by-name walk.
+        private static System.Type? _hunterOccType;
+        private static PropertyInfo? _defendersProp;
+
         private void EnforceDogLeashOnce()
         {
             var hb = GetComponent<HunterBuilding>();
@@ -685,12 +692,19 @@ namespace WardenOfTheWilds.Components
                 if (!(worker is Villager v) || v.occupation == null) continue;
 
                 var occType = v.occupation.GetType();
-                if (occType.Name != "VillagerOccupationHunter") continue;
+                // Resolve Type + PropertyInfo once (string compare only until the
+                // first match); thereafter a cheap reference-equality check.
+                if (_hunterOccType == null)
+                {
+                    if (occType.Name != "VillagerOccupationHunter") continue;
+                    _hunterOccType = occType;
+                    _defendersProp = occType.GetProperty("defenders", AllInstance);
+                }
+                else if (occType != _hunterOccType) continue;
 
-                var defField = occType.GetProperty("defenders", AllInstance);
-                if (defField == null) continue;
+                if (_defendersProp == null) continue;
 
-                var defenders = defField.GetValue(v.occupation)
+                var defenders = _defendersProp.GetValue(v.occupation)
                     as System.Collections.IEnumerable;
                 if (defenders == null) continue;
 

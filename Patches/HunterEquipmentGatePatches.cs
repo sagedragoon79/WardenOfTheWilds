@@ -205,6 +205,18 @@ namespace WardenOfTheWilds.Patches
         private static System.Collections.IList? _rangedWeaponItems = null;
         private static bool _itemRefsResolved = false;
 
+        // Perf (B): cache the ItemStorage.GetItemCount(List<Item>) MethodInfo
+        // and reuse a single arg buffer. IsHunterUnderEquipped runs per-frame
+        // per actively-hunting villager (HuntSubTask never sets a positive
+        // timeBetweenUpdates, so IsSubTaskValidToContinue fires every frame),
+        // and this call sits BEFORE the proactive rate-limit. Re-walking the
+        // method table + allocating an object[] every frame × N hunters was
+        // the review's only High finding. Main-thread, non-reentrant → a
+        // shared static arg buffer is safe.
+        private static MethodInfo? _listGetItemCountMethod = null;
+        private static bool _listGetItemCountResolved = false;
+        private static readonly object[] _listGetItemCountArgs = new object[1];
+
         /// <summary>
         /// Returns true if the hunter is currently below the equipment
         /// threshold required to engage in non-defensive work tasks
@@ -254,15 +266,22 @@ namespace WardenOfTheWilds.Patches
                     if (arrowCount < (uint)minArrows) return true;
                 }
 
-                // Bow check (uses GetItemCount(List<Item>) overload)
+                // Bow check (uses GetItemCount(List<Item>) overload).
+                // Perf (B): resolve the MethodInfo once, then invoke through a
+                // reused arg buffer — no per-frame GetMethod walk / object[] alloc.
                 if (WardenOfTheWildsMod.HunterRequiresBowForWork.Value
                  && _rangedWeaponItems != null && _rangedWeaponItems.Count > 0)
                 {
-                    var listGetItemCount = typeof(ItemStorage).GetMethod(
-                        "GetItemCount", new[] { _rangedWeaponItems.GetType() });
-                    if (listGetItemCount != null)
+                    if (!_listGetItemCountResolved)
                     {
-                        var raw = listGetItemCount.Invoke(inv, new object[] { _rangedWeaponItems });
+                        _listGetItemCountResolved = true;
+                        _listGetItemCountMethod = typeof(ItemStorage).GetMethod(
+                            "GetItemCount", new[] { _rangedWeaponItems.GetType() });
+                    }
+                    if (_listGetItemCountMethod != null)
+                    {
+                        _listGetItemCountArgs[0] = _rangedWeaponItems;
+                        var raw = _listGetItemCountMethod.Invoke(inv, _listGetItemCountArgs);
                         uint bowCount = (uint)raw;
                         if (bowCount == 0) return true;
                     }

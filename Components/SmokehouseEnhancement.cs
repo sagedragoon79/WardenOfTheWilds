@@ -46,6 +46,11 @@ namespace WardenOfTheWilds.Components
         private bool      _initialized = false;
         private WorkArea? _workArea;
         private bool      _lastSelected = false;
+        // Perf (A): cache the SelectableComponent — added once at building setup,
+        // never removed. Mirrors HunterCabinEnhancement / FishingShackEnhancement
+        // (whose comment notes "GetComponent on every frame across many shacks
+        // adds up"). Smokehouse was the one enhancement that missed this.
+        private SelectableComponent? _cachedSelectable;
 
         // ── Unity lifecycle ───────────────────────────────────────────────────
         private void Start()
@@ -100,14 +105,23 @@ namespace WardenOfTheWilds.Components
 
         private void Update()
         {
+            // Perf (A): early-out when there's nothing to maintain. _workArea is
+            // only assigned in UpdateWorkAreaCircle, which only runs when the
+            // overhaul + radius features are on — so a null _workArea means the
+            // SetEnabled below is a guaranteed no-op. Skips all per-frame work
+            // (incl. the GetComponent) when the feature is off.
+            if (!WardenOfTheWildsMod.SmokehouseOverhaulEnabled.Value || _workArea == null)
+                return;
+
             // Hot-reload work area on selection so the circle appears/hides
-            // with the building selection state.
-            var sel = GetComponent<SelectableComponent>();
-            bool selected = sel != null && sel.IsSelected;
+            // with the building selection state. Cached selectable (perf A).
+            if (_cachedSelectable == null)
+                _cachedSelectable = GetComponent<SelectableComponent>();
+            bool selected = _cachedSelectable != null && _cachedSelectable.IsSelected;
             if (selected != _lastSelected)
             {
                 _lastSelected = selected;
-                _workArea?.SetEnabled(selected && WardenOfTheWildsMod.SmokehouseRadiusEnabled.Value);
+                _workArea.SetEnabled(selected && WardenOfTheWildsMod.SmokehouseRadiusEnabled.Value);
             }
         }
 

@@ -573,6 +573,7 @@ namespace WardenOfTheWilds.Patches
                 _hunterLodgeCacheExpiry.Remove(vKey);
                 _kiteEndTime.Remove(vKey);
                 _kiteTarget.Remove(vKey);
+                _kiteHunter.Remove(vKey);
                 _lastChaseBreakTimes.Remove(vKey);
 
                 // Remove from building worker set (tied by building key) — also
@@ -997,8 +998,10 @@ namespace WardenOfTheWilds.Patches
                 var causerComp = GetGameComponent(damageCauser);
                 if (causerComp == null || !IsDangerousAnimal(causerComp)) return;
 
-                RecordEngagementAndCheckRetreat(hunter, causerComp,
-                    $"hit ({damageAmount:F1} dmg)", damageAmount);
+                // Perf (H): pass a constant label — the damage value is formatted
+                // into the log only on the rare retreat path (below), not built
+                // and discarded on every hit.
+                RecordEngagementAndCheckRetreat(hunter, causerComp, "hit", damageAmount);
             }
             catch (Exception ex)
             {
@@ -1176,8 +1179,11 @@ namespace WardenOfTheWilds.Patches
                 ? $"LOW HP ({GetHunterHealthPercent(hunter):P0})"
                 : $"OVERWHELMED ({liveCount} live predators)";
 
+            // Suffix the damage on the hit path (matches the old per-hit label
+            // exactly, incl. a 0.0-dmg overwhelmed retreat); aggro has no dmg.
+            string label = eventLabel == "aggro" ? eventLabel : $"{eventLabel} ({damageAmount:F1} dmg)";
             MelonLogger.Msg(
-                $"[WotW] Retreat [{reason}] ({eventLabel}): " +
+                $"[WotW] Retreat [{reason}] ({label}): " +
                 $"'{hunter.gameObject.name}' ← '{normalizedPredator.gameObject.name}', " +
                 $"retreating {retreatDist:F1}u");
         }
@@ -1508,6 +1514,16 @@ namespace WardenOfTheWilds.Patches
             }
         }
 
+        // Perf (F): Type-keyed cache of the HP PropertyInfos. GetTargetHpFraction
+        // runs per task-update tick (dozens/sec) for every T1 hunter in active
+        // melee; resolving up to 5 GetProperty member-table walks every call was
+        // wasted work. Target type genuinely varies (Wolf/Bear/Boar/Deer/raider),
+        // so we key by Type and cache the NEGATIVE result too (entries with null
+        // props) so missing-property types don't re-run the chain each tick.
+        private struct HpProps { public PropertyInfo Perc; public PropertyInfo Life; public PropertyInfo MaxLife; }
+        private static readonly Dictionary<Type, HpProps> _hpPropCache =
+            new Dictionary<Type, HpProps>();
+
         /// <summary>Reads the target's normalized HP fraction (0-1). Returns
         /// -1 if we can't determine it, in which case callers should refuse
         /// melee to be safe.</summary>
@@ -1516,20 +1532,27 @@ namespace WardenOfTheWilds.Patches
             try
             {
                 var t = target.GetType();
-                // Prefer explicit percent / fraction
-                var percProp = t.GetProperty("lifePercentage", AllInstance)
-                            ?? t.GetProperty("healthPercentage", AllInstance)
-                            ?? t.GetProperty("lifeFraction", AllInstance);
-                if (percProp != null && percProp.PropertyType == typeof(float))
-                    return (float)percProp.GetValue(target);
-
-                // Fall back to life / maxLife
-                var lifeProp = t.GetProperty("life", AllInstance);
-                var maxLifeProp = t.GetProperty("maxLife", AllInstance);
-                if (lifeProp != null && maxLifeProp != null)
+                if (!_hpPropCache.TryGetValue(t, out var hp))
                 {
-                    float life = System.Convert.ToSingle(lifeProp.GetValue(target));
-                    float maxLife = System.Convert.ToSingle(maxLifeProp.GetValue(target));
+                    hp = new HpProps();
+                    // Prefer explicit percent / fraction (must be float).
+                    var percProp = t.GetProperty("lifePercentage", AllInstance)
+                                ?? t.GetProperty("healthPercentage", AllInstance)
+                                ?? t.GetProperty("lifeFraction", AllInstance);
+                    if (percProp != null && percProp.PropertyType == typeof(float))
+                        hp.Perc = percProp;
+                    hp.Life = t.GetProperty("life", AllInstance);
+                    hp.MaxLife = t.GetProperty("maxLife", AllInstance);
+                    _hpPropCache[t] = hp; // cache negative results too
+                }
+
+                if (hp.Perc != null)
+                    return (float)hp.Perc.GetValue(target);
+
+                if (hp.Life != null && hp.MaxLife != null)
+                {
+                    float life = System.Convert.ToSingle(hp.Life.GetValue(target));
+                    float maxLife = System.Convert.ToSingle(hp.MaxLife.GetValue(target));
                     if (maxLife > 0f) return Mathf.Clamp01(life / maxLife);
                 }
             }
@@ -1562,6 +1585,15 @@ namespace WardenOfTheWilds.Patches
                         workers.Remove(villager);
                     _hunterBuildingKey.Remove(vKeyPrune);
                 }
+
+                // Perf (D) correctness: drop any in-flight kite for this hunter on
+                // unassignment. The old FindHunterByKey reverse-scan returned null
+                // once a hunter left _buildingWorkers, expiring the kite next sweep;
+                // the direct _kiteHunter ref no longer self-expires that way, so
+                // prune here to preserve the old "drop kite on unassignment" behavior.
+                _kiteEndTime.Remove(vKeyPrune);
+                _kiteTarget.Remove(vKeyPrune);
+                _kiteHunter.Remove(vKeyPrune);
 
                 // ── Restore vanilla shelter emergence radius ─────────────────
                 RestoreHunterShelterRadius(villager, vKeyPrune);
@@ -2295,6 +2327,17 @@ namespace WardenOfTheWilds.Patches
             new Dictionary<int, float>();
         private static readonly Dictionary<int, Component> _kiteTarget =
             new Dictionary<int, Component>();
+        // Perf (D): store the hunter Component directly so UpdateActiveKites
+        // doesn't reverse-resolve it via an un-indexed O(buildings×workers)
+        // scan of _buildingWorkers (FindHunterByKey, now removed).
+        private static readonly Dictionary<int, Component> _kiteHunter =
+            new Dictionary<int, Component>();
+        // Perf (E): reused scratch list — no per-tick `new List<int>()` (mirrors
+        // HunterDogCombatSystem._expiredScratch). Single call site, main-thread.
+        private static readonly List<int> _kiteExpiredScratch = new List<int>();
+        // Perf (D): frame-gate so the global kite/taunt maintenance runs once per
+        // frame even though the postfix fires per-hunting-villager per tick.
+        private static int _kiteMaintFrame = -1;
 
         private static void ApplyPostShotRetreat(Component hunter, Vector3 animalPos)
         {
@@ -2309,6 +2352,7 @@ namespace WardenOfTheWilds.Patches
                 // whole reload period, not just at arrow-release moment.
                 int hKey = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(hunter);
                 _kiteEndTime[hKey] = Time.time + reload;
+                _kiteHunter[hKey] = hunter; // direct ref — see UpdateActiveKites
 
                 // Try to find the target Component for continuous tracking
                 Component target = FindNearestThreatInRadius(hunter.transform.position, 50f);
@@ -2372,17 +2416,18 @@ namespace WardenOfTheWilds.Patches
         {
             if (_kiteEndTime.Count == 0) return;
 
-            var expired = new List<int>();
+            _kiteExpiredScratch.Clear();
             foreach (var kv in _kiteEndTime)
             {
-                if (Time.time >= kv.Value) { expired.Add(kv.Key); continue; }
+                if (Time.time >= kv.Value) { _kiteExpiredScratch.Add(kv.Key); continue; }
 
                 if (!_kiteTarget.TryGetValue(kv.Key, out Component target) || target == null)
-                { expired.Add(kv.Key); continue; }
+                { _kiteExpiredScratch.Add(kv.Key); continue; }
 
-                // Find hunter by walking the registry keyed at _buildingWorkers
-                Component hunter = FindHunterByKey(kv.Key);
-                if (hunter == null) { expired.Add(kv.Key); continue; }
+                // Hunter Component stored directly at kite-start (perf D) — no
+                // reverse scan of _buildingWorkers.
+                if (!_kiteHunter.TryGetValue(kv.Key, out Component hunter) || hunter == null)
+                { _kiteExpiredScratch.Add(kv.Key); continue; }
 
                 ApplyKiteStep(hunter, target.transform.position);
 
@@ -2396,26 +2441,13 @@ namespace WardenOfTheWilds.Patches
                 if (IsDangerousAnimal(target))
                     HunterDogCombatSystem.EngageHuntersDog(target, hunter);
             }
-            foreach (var k in expired)
+            for (int i = 0; i < _kiteExpiredScratch.Count; i++)
             {
+                int k = _kiteExpiredScratch[i];
                 _kiteEndTime.Remove(k);
                 _kiteTarget.Remove(k);
+                _kiteHunter.Remove(k);
             }
-        }
-
-        /// <summary>Reverse-lookup: find a hunter Component by its hash key.</summary>
-        private static Component FindHunterByKey(int hKey)
-        {
-            foreach (var kvp in _buildingWorkers)
-            {
-                foreach (var worker in kvp.Value)
-                {
-                    if (worker == null) continue;
-                    if (System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(worker) == hKey)
-                        return worker;
-                }
-            }
-            return null;
         }
 
         // ── Cabin lookup ──────────────────────────────────────────────────────
@@ -2681,14 +2713,17 @@ namespace WardenOfTheWilds.Patches
             object __instance,
             ref bool __result)
         {
-            // Maintain any active post-shot kites — runs at hunt-task tick rate
-            // (frequent enough to keep backward pressure during reload). This is
-            // cheap: typically 0-2 active kites at any moment.
-            UpdateActiveKites();
-
-            // Re-assert / fade-out any active hunter-dog taunts on the same tick.
-            // Cheap: iterates the small active-taunt set, no scene query.
-            HunterDogCombatSystem.UpdateActiveTaunts();
+            // Maintain active post-shot kites + dog taunts. Both are GLOBAL,
+            // idempotent maintenance, but this postfix fires per-hunting-villager
+            // per tick — so frame-gate to run the maintenance once per frame
+            // instead of N× (perf D). Cheap regardless (Count==0 early-outs), but
+            // this removes the redundant N-1 invocations with zero behavior change.
+            if (_kiteMaintFrame != Time.frameCount)
+            {
+                _kiteMaintFrame = Time.frameCount;
+                UpdateActiveKites();
+                HunterDogCombatSystem.UpdateActiveTaunts();
+            }
 
             try
             {
