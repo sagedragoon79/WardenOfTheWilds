@@ -23,7 +23,7 @@ using WardenOfTheWilds.Patches;
 //    • Ctrl+K: select every hunter on the map (right-click to move/attack).
 // ─────────────────────────────────────────────────────────────────────────────
 
-[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.20", "SageDragoon")]
+[assembly: MelonInfo(typeof(WardenOfTheWilds.WardenOfTheWildsMod), "Warden of the Wilds", "1.0.21", "SageDragoon")]
 [assembly: MelonGame("Crate Entertainment", "Farthest Frontier")]
 
 namespace WardenOfTheWilds
@@ -749,12 +749,14 @@ namespace WardenOfTheWilds
                 description: "Multiplier on the number of groundhog raid waves per crop-field count. " +
                              "1.0 = vanilla, 2.0 = twice as many, 0.5 = half as many.");
 
-            WildFoxEnabled = cat.CreateEntry("WildFoxEnabled", true,
+            WildFoxEnabled = cat.CreateEntry("WildFoxEnabled", false,
                 display_name: "Pets DLC: Wild Fox Population (Roaming)",
-                description: "When true and the Pets DLC is owned, WotW spawns a roaming wild-fox " +
-                             "population that wanders the map like wolves instead of only appearing " +
-                             "as chicken-coop raiders. Vanilla DLC raider foxes still spawn separately " +
-                             "based on chickens; this adds wildlife on top.");
+                description: "OFF by default. When enabled (and the Pets DLC is owned), WotW spawns a " +
+                             "roaming wild-fox population that wanders the map like wolves instead of only " +
+                             "appearing as chicken-coop raiders. This is ADDITIONAL wildlife on top of the " +
+                             "vanilla DLC raider foxes (which spawn from chicken count regardless) — turning " +
+                             "it on can noticeably increase how many foxes you see. Toggle it in the Keep " +
+                             "Clarity settings panel under Warden of the Wilds.");
 
             WildFoxMaxCount = cat.CreateEntry("WildFoxMaxCount", 6,
                 display_name: "Pets DLC: Wild Fox Max Count",
